@@ -88,19 +88,16 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def rvm_data(self, rvm_id: str) -> dict[str, Any]:
         return (self.data.get("stats", {}) or {}).get(rvm_id, {}) or {}
 
-    def machine_device_name(self, rvm_id: str) -> str:
-        machine = next((m for m in self.machines() if m.id == rvm_id), None)
+    def machine_type(self, rvm_id: str) -> str:
         rvm = self.rvm_data(rvm_id)
-        configured = (machine.name if machine else rvm_id).strip()
-        if configured and configured != rvm_id:
-            return configured
-        account = str(rvm.get("SiteInfoAccount") or "").strip()
-        if account:
-            return account
-        location = str(rvm.get("SiteInfoLocationID") or "").strip()
-        if location:
-            return location
-        return rvm_id
+        for key in ("RvmType", "RVMType", "MachineType", "Type", "Model"):
+            value = str(rvm.get(key) or "").strip()
+            if value:
+                return value.title()
+        return "RVM"
+
+    def machine_device_name(self, rvm_id: str) -> str:
+        return f"{rvm_id}-{self.machine_type(rvm_id)}"
 
     def active_bins(self, rvm_id: str) -> list[int]:
         rvm = self.rvm_data(rvm_id)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 DOMAIN = "envipco_rvm"
 NAME = "Envipco RVM"
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 
 CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
@@ -46,6 +46,21 @@ REJECT_KEYS = [
     "mode",
 ]
 
+REJECT_LABELS_NL: dict[str, str] = {
+    "noBarcode": "Afkeur geen barcode",
+    "notInDb": "Afkeur niet in database",
+    "bcMove": "Afkeur barcode verplaatst",
+    "sortingErr": "Afkeur sorteerfout",
+    "notAccepted": "Afkeur niet geaccepteerd",
+    "shape": "Afkeur vorm",
+    "weight": "Afkeur gewicht",
+    "collision": "Afkeur botsing",
+    "binFull": "Afkeur bak vol",
+    "notPermitted": "Afkeur niet toegestaan",
+    "wrongMaterial": "Afkeur fout materiaal",
+    "mode": "Afkeur modus",
+}
+
 ACCEPT_FIELDS_PREFIX = "Accept"
 
 MATERIAL_MAP: dict[str, str] = {
@@ -55,6 +70,12 @@ MATERIAL_MAP: dict[str, str] = {
     "PET": "PET",
     "GLASS": "GLASS",
     "GLS": "GLASS",
+}
+
+MATERIAL_LABELS_NL: dict[str, str] = {
+    "CAN": "Blik",
+    "PET": "PET",
+    "GLASS": "Glas",
 }
 
 DEFAULT_BIN_CAPACITY_BY_MATERIAL: dict[str, int] = {

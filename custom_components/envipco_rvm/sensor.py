@@ -21,7 +21,9 @@ from .const import (
     DOMAIN,
     KEY_ACCEPTED_CANS,
     KEY_ACCEPTED_PET,
+    MATERIAL_LABELS_NL,
     REJECT_KEYS,
+    REJECT_LABELS_NL,
     STATUS_LAST_REPORT_FALLBACK_KEYS,
     STATUS_LAST_REPORT_PRIMARY_KEY,
     STATUS_STATE_KEY,
@@ -71,6 +73,12 @@ def get_last_report_raw(rvm: dict[str, Any]) -> Any:
     return raw
 
 
+def material_label(material: str | None) -> str | None:
+    if not material:
+        return None
+    return MATERIAL_LABELS_NL.get(material, material)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     coordinator: EnvipcoCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     machines_cfg = entry.options.get(CONF_MACHINES, entry.data.get(CONF_MACHINES, [])) or []
@@ -118,7 +126,7 @@ class BaseSensor(CoordinatorEntity[EnvipcoCoordinator], SensorEntity):
             "identifiers": {(DOMAIN, self.machine.id)},
             "name": self.coordinator.machine_device_name(self.machine.id),
             "manufacturer": "Envipco",
-            "model": "RVM",
+            "model": self.coordinator.machine_type(self.machine.id),
             "serial_number": self.machine.id,
             "sw_version": str(rvm.get("VersionREL") or "").strip() or None,
             "hw_version": str(rvm.get("VersionMCX") or "").strip() or None,
@@ -131,9 +139,11 @@ class BaseSensor(CoordinatorEntity[EnvipcoCoordinator], SensorEntity):
 class StatusSensor(BaseSensor):
     _attr_translation_key = "status"
     _attr_icon = "mdi:robot"
+
     def __init__(self, coordinator, machine):
         super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_status"
+
     @property
     def native_value(self):
         return self._rvm().get(STATUS_STATE_KEY)
@@ -144,9 +154,11 @@ class LastReportSensor(BaseSensor):
     _attr_icon = "mdi:clock-outline"
     _attr_device_class = SensorDeviceClass.TIMESTAMP
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+
     def __init__(self, coordinator, machine):
         super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_last_report"
+
     @property
     def native_value(self):
         return parse_timestamp(get_last_report_raw(self._rvm()))
@@ -156,9 +168,11 @@ class LastReportTextSensor(BaseSensor):
     _attr_translation_key = "last_report_text"
     _attr_icon = "mdi:calendar-clock"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+
     def __init__(self, coordinator, machine):
         super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_last_report_text"
+
     @property
     def native_value(self):
         return format_local(parse_timestamp(get_last_report_raw(self._rvm())))
@@ -168,9 +182,11 @@ class AcceptedTotalSensor(BaseSensor):
     _attr_translation_key = "accepted_total"
     _attr_icon = "mdi:counter"
     _attr_state_class = SensorStateClass.TOTAL
+
     def __init__(self, coordinator, machine):
         super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_accepted_total"
+
     @property
     def native_value(self):
         return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get("accepted_total")
@@ -180,9 +196,11 @@ class AcceptedCansSensor(BaseSensor):
     _attr_translation_key = "accepted_cans"
     _attr_icon = "mdi:beer"
     _attr_state_class = SensorStateClass.TOTAL
+
     def __init__(self, coordinator, machine):
         super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_accepted_cans"
+
     @property
     def native_value(self):
         return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get(KEY_ACCEPTED_CANS)
@@ -192,9 +210,11 @@ class AcceptedPetSensor(BaseSensor):
     _attr_translation_key = "accepted_pet"
     _attr_icon = "mdi:bottle-soda"
     _attr_state_class = SensorStateClass.TOTAL
+
     def __init__(self, coordinator, machine):
         super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_accepted_pet"
+
     @property
     def native_value(self):
         return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get(KEY_ACCEPTED_PET)
@@ -204,9 +224,11 @@ class RejectTotalSensor(BaseSensor):
     _attr_translation_key = "reject_total"
     _attr_icon = "mdi:close-circle-outline"
     _attr_state_class = SensorStateClass.TOTAL
+
     def __init__(self, coordinator, machine):
         super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_reject_total"
+
     @property
     def native_value(self):
         return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get("rejects_total")
@@ -217,9 +239,11 @@ class RejectRateSensor(BaseSensor):
     _attr_icon = "mdi:percent"
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
+
     def __init__(self, coordinator, machine):
         super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_reject_rate"
+
     @property
     def native_value(self):
         return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get("reject_rate")
@@ -231,9 +255,11 @@ class RevenueTodaySensor(BaseSensor):
     _attr_native_unit_of_measurement = "EUR"
     _attr_device_class = SensorDeviceClass.MONETARY
     _attr_state_class = SensorStateClass.MEASUREMENT
+
     def __init__(self, coordinator, machine):
         super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_revenue_today"
+
     @property
     def native_value(self):
         return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get("revenue_today")
@@ -245,9 +271,11 @@ class RevenueCanTodaySensor(BaseSensor):
     _attr_native_unit_of_measurement = "EUR"
     _attr_device_class = SensorDeviceClass.MONETARY
     _attr_state_class = SensorStateClass.MEASUREMENT
+
     def __init__(self, coordinator, machine):
         super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_revenue_can_today"
+
     @property
     def native_value(self):
         return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get("revenue_can_today")
@@ -259,9 +287,11 @@ class RevenuePetTodaySensor(BaseSensor):
     _attr_native_unit_of_measurement = "EUR"
     _attr_device_class = SensorDeviceClass.MONETARY
     _attr_state_class = SensorStateClass.MEASUREMENT
+
     def __init__(self, coordinator, machine):
         super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_revenue_pet_today"
+
     @property
     def native_value(self):
         return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get("revenue_pet_today")
@@ -270,10 +300,12 @@ class RevenuePetTodaySensor(BaseSensor):
 class LocationInfoSensor(BaseSensor):
     _attr_icon = "mdi:map-marker"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+
     def __init__(self, coordinator, machine):
         super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_location_info"
-        self._attr_name = "Locatie info"
+        self._attr_name = "Locatie"
+
     @property
     def native_value(self):
         rvm = self._rvm()
@@ -282,14 +314,14 @@ class LocationInfoSensor(BaseSensor):
         city = str(rvm.get("SiteInfoCity") or "").strip()
         city_line = " ".join(part for part in [postal, city] if part).strip()
         return ", ".join(part for part in [address, city_line] if part) or None
+
     @property
     def extra_state_attributes(self):
         rvm = self._rvm()
         return {
             "machine_naam": self.coordinator.machine_device_name(self.machine.id),
             "machine_id": self.machine.id,
-            "site_account": rvm.get("SiteInfoAccount"),
-            "site_location_id": rvm.get("SiteInfoLocationID"),
+            "machine_type": self.coordinator.machine_type(self.machine.id),
             "adres": rvm.get("SiteInfoAddress"),
             "postcode": rvm.get("SiteInfoPostalCode"),
             "plaats": rvm.get("SiteInfoCity"),
@@ -299,11 +331,14 @@ class LocationInfoSensor(BaseSensor):
 
 class RejectTypeSensor(BaseSensor):
     _attr_icon = "mdi:alert-circle-outline"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
     def __init__(self, coordinator, machine, reject_key: str):
         super().__init__(coordinator, machine)
         self.reject_key = reject_key
         self._attr_unique_id = f"{machine.id}_reject_{reject_key}"
-        self._attr_name = f"Reject {reject_key}"
+        self._attr_name = REJECT_LABELS_NL.get(reject_key, f"Reject {reject_key}")
+
     @property
     def native_value(self):
         return (self.coordinator.data.get("rejects", {}) or {}).get(self.machine.id, {}).get(self.reject_key)
@@ -313,14 +348,20 @@ class BinBaseSensor(BaseSensor):
     def __init__(self, coordinator, machine, bin_no: int):
         super().__init__(coordinator, machine)
         self.bin_no = bin_no
+
     def _material(self) -> str | None:
         return normalize_material(self._rvm().get(f"{BIN_MATERIAL_PREFIX}{self.bin_no}"))
+
+    def _material_label(self) -> str | None:
+        return material_label(self._material())
+
     def _count(self) -> int | None:
         value = self._rvm().get(f"{BIN_COUNT_PREFIX}{self.bin_no}")
         try:
             return int(float(value))
         except (TypeError, ValueError):
             return None
+
     def _full(self):
         return self._rvm().get(f"{BIN_FULL_PREFIX}{self.bin_no}")
 
@@ -328,33 +369,43 @@ class BinBaseSensor(BaseSensor):
 class BinCountSensor(BinBaseSensor):
     _attr_icon = "mdi:counter"
     _attr_state_class = SensorStateClass.MEASUREMENT
+
     def __init__(self, coordinator, machine, bin_no: int):
         super().__init__(coordinator, machine, bin_no)
         self._attr_unique_id = f"{machine.id}_bin_{bin_no}_count"
-        material = self._material()
-        self._attr_name = f"Bin {bin_no} {material}" if material else f"Bin {bin_no}"
+        material = self._material_label()
+        self._attr_name = f"Bin {bin_no} aantal ({material})" if material else f"Bin {bin_no} aantal"
+
     @property
     def native_value(self):
         return self._count()
+
     @property
     def extra_state_attributes(self):
-        return {"materiaal": self._material(), "bin_full": self._full(), "actieve_limiet": self.coordinator.current_bin_limit(self.machine.id, self.bin_no)}
+        return {
+            "materiaal": self._material_label(),
+            "bin_full": self._full(),
+            "actieve_limiet": self.coordinator.current_bin_limit(self.machine.id, self.bin_no),
+        }
 
 
 class BinLimitSensor(BinBaseSensor):
     _attr_icon = "mdi:tune-vertical"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+
     def __init__(self, coordinator, machine, bin_no: int):
         super().__init__(coordinator, machine, bin_no)
         self._attr_unique_id = f"{machine.id}_bin_{bin_no}_active_limit"
         self._attr_name = f"Bin {bin_no} actieve limiet"
+
     @property
     def native_value(self):
         return self.coordinator.current_bin_limit(self.machine.id, self.bin_no)
+
     @property
     def extra_state_attributes(self):
         return {
-            "materiaal": self._material(),
+            "materiaal": self._material_label(),
             "api_limiet": self.coordinator.safe_int(self._rvm().get(f"BinInfoLimitBin{self.bin_no}")) or None,
             "ingestelde_limiet": self.coordinator.configured_bin_limit(self.machine.id, self.bin_no),
         }
@@ -364,10 +415,12 @@ class BinPercentageSensor(BinBaseSensor):
     _attr_icon = "mdi:percent"
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
+
     def __init__(self, coordinator, machine, bin_no: int):
         super().__init__(coordinator, machine, bin_no)
         self._attr_unique_id = f"{machine.id}_bin_{bin_no}_percentage"
-        self._attr_name = f"Bin {bin_no} percentage"
+        self._attr_name = f"Bin {bin_no} vulling"
+
     @property
     def native_value(self):
         count = self._count()
@@ -375,11 +428,12 @@ class BinPercentageSensor(BinBaseSensor):
         if count is None or not limit_value:
             return None
         return round(min(100.0, max(0.0, (count / limit_value) * 100)), 1)
+
     @property
     def extra_state_attributes(self):
         material = self._material()
         return {
-            "materiaal": material,
+            "materiaal": self._material_label(),
             "aantal": self._count(),
             "actieve_limiet": self.coordinator.current_bin_limit(self.machine.id, self.bin_no),
             "fallback_materiaal_limiet": DEFAULT_BIN_CAPACITY_BY_MATERIAL.get(material) if material else None,

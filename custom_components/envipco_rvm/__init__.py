@@ -32,7 +32,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             config_entry_id=entry.entry_id,
             identifiers={(DOMAIN, machine.id)},
             manufacturer="Envipco",
-            model="RVM",
+            model=coordinator.machine_type(machine.id),
             serial_number=machine.id,
             name=coordinator.machine_device_name(machine.id),
         )

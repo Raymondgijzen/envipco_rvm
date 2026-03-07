@@ -42,7 +42,7 @@ class BaseConfigNumber(CoordinatorEntity[EnvipcoCoordinator], NumberEntity):
             "identifiers": {(DOMAIN, self.machine_id)},
             "name": self.coordinator.machine_device_name(self.machine_id),
             "manufacturer": "Envipco",
-            "model": "RVM",
+            "model": self.coordinator.machine_type(self.machine_id),
             "serial_number": self.machine_id,
         }
 
@@ -107,7 +107,7 @@ class MachineRateConfigNumber(BaseConfigNumber):
 
 class CanRateConfigNumber(MachineRateConfigNumber):
     def __init__(self, coordinator: EnvipcoCoordinator, entry: ConfigEntry, machine_id: str) -> None:
-        super().__init__(coordinator, entry, machine_id, "can", "CAN tarief")
+        super().__init__(coordinator, entry, machine_id, "can", "Blik tarief")
 
 
 class PetRateConfigNumber(MachineRateConfigNumber):

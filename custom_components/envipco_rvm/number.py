@@ -65,7 +65,13 @@ class BinLimitConfigNumber(BaseConfigNumber):
         machine_limits[str(self.bin_no)] = int(round(value))
         all_limits[self.machine_id] = machine_limits
         options[CONF_MACHINE_BIN_LIMITS] = all_limits
+        domain_data = self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id)
+        if domain_data is not None:
+            domain_data["suppress_reload_once"] = True
         self.hass.config_entries.async_update_entry(self.entry, options=options)
+        self.entry = self.hass.config_entries.async_get_entry(self.entry.entry_id) or self.entry
+        self.coordinator.entry = self.entry
+        self.async_write_ha_state()
         await self.coordinator.async_request_refresh()
 
 
@@ -95,7 +101,13 @@ class MachineRateConfigNumber(BaseConfigNumber):
         machine_rates[self.rate_key] = round(float(value), 4)
         all_rates[self.machine_id] = machine_rates
         options[CONF_MACHINE_RATES] = all_rates
+        domain_data = self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id)
+        if domain_data is not None:
+            domain_data["suppress_reload_once"] = True
         self.hass.config_entries.async_update_entry(self.entry, options=options)
+        self.entry = self.hass.config_entries.async_get_entry(self.entry.entry_id) or self.entry
+        self.coordinator.entry = self.entry
+        self.async_write_ha_state()
         await self.coordinator.async_request_refresh()
 
 

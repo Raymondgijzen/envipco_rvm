@@ -252,7 +252,7 @@ class RevenueTodaySensor(BaseSensor):
     _attr_icon = "mdi:currency-eur"
     _attr_native_unit_of_measurement = "EUR"
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_state_class = SensorStateClass.TOTAL
 
     def __init__(self, coordinator, machine):
         super().__init__(coordinator, machine)
@@ -273,7 +273,7 @@ class RevenueCanTodaySensor(BaseSensor):
     _attr_icon = "mdi:currency-eur"
     _attr_native_unit_of_measurement = "EUR"
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_state_class = SensorStateClass.TOTAL
 
     def __init__(self, coordinator, machine):
         super().__init__(coordinator, machine)
@@ -290,7 +290,7 @@ class RevenuePetTodaySensor(BaseSensor):
     _attr_icon = "mdi:currency-eur"
     _attr_native_unit_of_measurement = "EUR"
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_state_class = SensorStateClass.TOTAL
 
     def __init__(self, coordinator, machine):
         super().__init__(coordinator, machine)

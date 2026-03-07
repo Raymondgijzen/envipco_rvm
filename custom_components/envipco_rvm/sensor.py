@@ -137,7 +137,7 @@ class BaseSensor(CoordinatorEntity[EnvipcoCoordinator], SensorEntity):
 
 
 class StatusSensor(BaseSensor):
-    _attr_translation_key = "status"
+    _attr_name = "Status"
     _attr_icon = "mdi:robot"
 
     def __init__(self, coordinator, machine):
@@ -150,7 +150,7 @@ class StatusSensor(BaseSensor):
 
 
 class LastReportSensor(BaseSensor):
-    _attr_translation_key = "last_report"
+    _attr_name = "Laatste rapport"
     _attr_icon = "mdi:clock-outline"
     _attr_device_class = SensorDeviceClass.TIMESTAMP
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -165,7 +165,7 @@ class LastReportSensor(BaseSensor):
 
 
 class LastReportTextSensor(BaseSensor):
-    _attr_translation_key = "last_report_text"
+    _attr_name = "Laatste rapport tekst"
     _attr_icon = "mdi:calendar-clock"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -179,7 +179,7 @@ class LastReportTextSensor(BaseSensor):
 
 
 class AcceptedTotalSensor(BaseSensor):
-    _attr_translation_key = "accepted_total"
+    _attr_name = "Totaal ingenomen"
     _attr_icon = "mdi:counter"
     _attr_state_class = SensorStateClass.TOTAL
 
@@ -189,11 +189,11 @@ class AcceptedTotalSensor(BaseSensor):
 
     @property
     def native_value(self):
-        return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get("accepted_total")
+        return self.coordinator.machine_total_value(self.machine.id, "accepted_total")
 
 
 class AcceptedCansSensor(BaseSensor):
-    _attr_translation_key = "accepted_cans"
+    _attr_name = "Blik totaal"
     _attr_icon = "mdi:beer"
     _attr_state_class = SensorStateClass.TOTAL
 
@@ -203,11 +203,11 @@ class AcceptedCansSensor(BaseSensor):
 
     @property
     def native_value(self):
-        return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get(KEY_ACCEPTED_CANS)
+        return self.coordinator.machine_total_value(self.machine.id, KEY_ACCEPTED_CANS)
 
 
 class AcceptedPetSensor(BaseSensor):
-    _attr_translation_key = "accepted_pet"
+    _attr_name = "PET totaal"
     _attr_icon = "mdi:bottle-soda"
     _attr_state_class = SensorStateClass.TOTAL
 
@@ -217,11 +217,11 @@ class AcceptedPetSensor(BaseSensor):
 
     @property
     def native_value(self):
-        return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get(KEY_ACCEPTED_PET)
+        return self.coordinator.machine_total_value(self.machine.id, KEY_ACCEPTED_PET)
 
 
 class RejectTotalSensor(BaseSensor):
-    _attr_translation_key = "reject_total"
+    _attr_name = "Afkeur totaal"
     _attr_icon = "mdi:close-circle-outline"
     _attr_state_class = SensorStateClass.TOTAL
 
@@ -231,11 +231,11 @@ class RejectTotalSensor(BaseSensor):
 
     @property
     def native_value(self):
-        return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get("rejects_total")
+        return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get("rejects_total", 0)
 
 
 class RejectRateSensor(BaseSensor):
-    _attr_translation_key = "reject_rate"
+    _attr_name = "Afkeurpercentage"
     _attr_icon = "mdi:percent"
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -246,11 +246,11 @@ class RejectRateSensor(BaseSensor):
 
     @property
     def native_value(self):
-        return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get("reject_rate")
+        return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get("reject_rate", 0.0)
 
 
 class RevenueTodaySensor(BaseSensor):
-    _attr_translation_key = "revenue_today"
+    _attr_name = "Monetaire waarde totaal"
     _attr_icon = "mdi:currency-eur"
     _attr_native_unit_of_measurement = "EUR"
     _attr_device_class = SensorDeviceClass.MONETARY
@@ -262,11 +262,16 @@ class RevenueTodaySensor(BaseSensor):
 
     @property
     def native_value(self):
-        return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get("revenue_today")
+        rate_can, rate_pet = self.coordinator.machine_rates(self.machine.id)
+        return round(
+            (self.coordinator.machine_total_value(self.machine.id, KEY_ACCEPTED_CANS) * rate_can)
+            + (self.coordinator.machine_total_value(self.machine.id, KEY_ACCEPTED_PET) * rate_pet),
+            4,
+        )
 
 
 class RevenueCanTodaySensor(BaseSensor):
-    _attr_translation_key = "revenue_can_today"
+    _attr_name = "Monetaire waarde blik"
     _attr_icon = "mdi:currency-eur"
     _attr_native_unit_of_measurement = "EUR"
     _attr_device_class = SensorDeviceClass.MONETARY
@@ -278,11 +283,12 @@ class RevenueCanTodaySensor(BaseSensor):
 
     @property
     def native_value(self):
-        return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get("revenue_can_today")
+        rate_can, _ = self.coordinator.machine_rates(self.machine.id)
+        return round(self.coordinator.machine_total_value(self.machine.id, KEY_ACCEPTED_CANS) * rate_can, 4)
 
 
 class RevenuePetTodaySensor(BaseSensor):
-    _attr_translation_key = "revenue_pet_today"
+    _attr_name = "Monetaire waarde PET"
     _attr_icon = "mdi:currency-eur"
     _attr_native_unit_of_measurement = "EUR"
     _attr_device_class = SensorDeviceClass.MONETARY
@@ -294,7 +300,8 @@ class RevenuePetTodaySensor(BaseSensor):
 
     @property
     def native_value(self):
-        return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get("revenue_pet_today")
+        _, rate_pet = self.coordinator.machine_rates(self.machine.id)
+        return round(self.coordinator.machine_total_value(self.machine.id, KEY_ACCEPTED_PET) * rate_pet, 4)
 
 
 class LocationInfoSensor(BaseSensor):
@@ -341,7 +348,7 @@ class RejectTypeSensor(BaseSensor):
 
     @property
     def native_value(self):
-        return (self.coordinator.data.get("rejects", {}) or {}).get(self.machine.id, {}).get(self.reject_key)
+        return (self.coordinator.data.get("rejects", {}) or {}).get(self.machine.id, {}).get(self.reject_key, 0)
 
 
 class BinBaseSensor(BaseSensor):

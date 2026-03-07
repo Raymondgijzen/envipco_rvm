@@ -2,7 +2,7 @@ from __future__ import annotations
 
 DOMAIN = "envipco_rvm"
 NAME = "Envipco RVM"
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 
 CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
@@ -65,6 +65,9 @@ ACCEPT_FIELDS_PREFIX = "Accept"
 
 MATERIAL_MAP: dict[str, str] = {
     "ALU": "CAN",
+    "ALU STEEL": "CAN",
+    "ALUSTEEL": "CAN",
+    "STEEL": "CAN",
     "CAN": "CAN",
     "CANS": "CAN",
     "PET": "PET",

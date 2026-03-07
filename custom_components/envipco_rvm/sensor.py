@@ -11,6 +11,7 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
+from homeassistant.util import slugify
 
 from .const import (
     BIN_COUNT_PREFIX,
@@ -130,6 +131,13 @@ class BaseSensor(CoordinatorEntity[EnvipcoCoordinator], SensorEntity):
     def device_info(self):
         return self.coordinator.machine_device_info(self.machine.id)
 
+    @property
+    def suggested_object_id(self) -> str | None:
+        unique_id = getattr(self, "_attr_unique_id", None)
+        if unique_id:
+            return slugify(str(unique_id), separator="_")
+        return slugify(f"{self.machine.id}_{self.__class__.__name__.lower()}", separator="_")
+
     def _rvm(self) -> dict[str, Any]:
         return self.coordinator.rvm_data(self.machine.id)
 
@@ -248,7 +256,7 @@ class RejectRateSensor(BaseSensor):
 
 
 class RevenueTodaySensor(BaseSensor):
-    _attr_name = "Monetaire waarde totaal"
+    _attr_name = "Opbrengst Totaal"
     _attr_icon = "mdi:currency-eur"
     _attr_native_unit_of_measurement = "EUR"
     _attr_device_class = SensorDeviceClass.MONETARY
@@ -269,7 +277,7 @@ class RevenueTodaySensor(BaseSensor):
 
 
 class RevenueCanTodaySensor(BaseSensor):
-    _attr_name = "Monetaire waarde blik"
+    _attr_name = "Opbrengst Blik"
     _attr_icon = "mdi:currency-eur"
     _attr_native_unit_of_measurement = "EUR"
     _attr_device_class = SensorDeviceClass.MONETARY
@@ -286,7 +294,7 @@ class RevenueCanTodaySensor(BaseSensor):
 
 
 class RevenuePetTodaySensor(BaseSensor):
-    _attr_name = "Monetaire waarde PET"
+    _attr_name = "Opbrengst PET"
     _attr_icon = "mdi:currency-eur"
     _attr_native_unit_of_measurement = "EUR"
     _attr_device_class = SensorDeviceClass.MONETARY

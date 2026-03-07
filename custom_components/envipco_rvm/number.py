@@ -6,6 +6,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import slugify
 
 from .const import CONF_MACHINE_BIN_LIMITS, CONF_MACHINE_RATES, CONF_MACHINES, DOMAIN
 from .coordinator import EnvipcoCoordinator
@@ -39,6 +40,13 @@ class BaseConfigNumber(CoordinatorEntity[EnvipcoCoordinator], NumberEntity):
     @property
     def device_info(self):
         return self.coordinator.machine_device_info(self.machine_id)
+
+    @property
+    def suggested_object_id(self) -> str | None:
+        unique_id = getattr(self, "_attr_unique_id", None)
+        if unique_id:
+            return slugify(str(unique_id), separator="_")
+        return slugify(f"{self.machine_id}_{self.__class__.__name__.lower()}", separator="_")
 
 
 class BinLimitConfigNumber(BaseConfigNumber):

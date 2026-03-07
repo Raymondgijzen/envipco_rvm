@@ -2,7 +2,7 @@ from __future__ import annotations
 
 DOMAIN = "envipco_rvm"
 NAME = "Envipco RVM"
-VERSION = "1.0.9"
+VERSION = "1.0.14"
 
 CONF_USERNAME = "username"
 CONF_PASSWORD = "password"

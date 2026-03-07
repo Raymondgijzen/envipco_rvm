@@ -126,6 +126,17 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             value = str(rvm.get(key) or "").strip()
             if value:
                 return value.title()
+
+        material_1 = normalize_material(rvm.get(f"{BIN_MATERIAL_PREFIX}1"))
+        material_2 = normalize_material(rvm.get(f"{BIN_MATERIAL_PREFIX}2"))
+        material_3 = normalize_material(rvm.get(f"{BIN_MATERIAL_PREFIX}3"))
+        material_4 = normalize_material(rvm.get(f"{BIN_MATERIAL_PREFIX}4"))
+        active = set(self.active_bins(rvm_id))
+
+        if material_1 == "CAN" and material_2 == "PET" and 3 not in active and 4 not in active:
+            return "Quantum"
+        if material_1 == "CAN" and material_3 == "PET" and material_4 == "CAN":
+            return "Optima"
         return "RVM"
 
     def machine_device_name(self, rvm_id: str) -> str:
@@ -208,35 +219,10 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def bin_material(self, rvm_id: str, bin_no: int) -> str | None:
         return normalize_material(self.rvm_data(rvm_id).get(f"{BIN_MATERIAL_PREFIX}{bin_no}"))
 
-    def machine_bin_totals(self, rvm_id: str) -> dict[str, int]:
-        totals = {
-            KEY_ACCEPTED_CANS: 0,
-            KEY_ACCEPTED_PET: 0,
-            KEY_ACCEPTED_GLASS: 0,
-        }
-        for bin_no in self.active_bins(rvm_id):
-            material = self.bin_material(rvm_id, bin_no)
-            count = self.safe_int(self.rvm_data(rvm_id).get(f"{BIN_COUNT_PREFIX}{bin_no}"))
-            if not material or count <= 0:
-                continue
-            if material == "CAN":
-                totals[KEY_ACCEPTED_CANS] += count
-            elif material == "PET":
-                totals[KEY_ACCEPTED_PET] += count
-            elif material == "GLASS":
-                totals[KEY_ACCEPTED_GLASS] += count
-        return totals
-
     def machine_total_value(self, rvm_id: str, key: str) -> int:
         data = self.data or {}
         totals = (data.get("totals", {}) or {}).get(rvm_id, {}) or {}
-        value = totals.get(key)
-        if value is not None:
-            return value
-        bin_totals = self.machine_bin_totals(rvm_id)
-        if key == "accepted_total":
-            return sum(bin_totals.values())
-        return bin_totals.get(key, 0)
+        return self.safe_int(totals.get(key))
 
     async def _async_update_machine_meta(self, stats: dict[str, Any]) -> None:
         site_ids: set[str] = set()
@@ -342,10 +328,11 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         totals: dict[str, dict[str, Any]] = {}
         for rvm_id in self.rvm_ids():
-            fallback_bin_totals = self.machine_bin_totals(rvm_id)
-            accepted_cans = accepted_by_machine[rvm_id].get(KEY_ACCEPTED_CANS, 0) or fallback_bin_totals.get(KEY_ACCEPTED_CANS, 0)
-            accepted_pet = accepted_by_machine[rvm_id].get(KEY_ACCEPTED_PET, 0) or fallback_bin_totals.get(KEY_ACCEPTED_PET, 0)
-            accepted_glass = accepted_by_machine[rvm_id].get(KEY_ACCEPTED_GLASS, 0) or fallback_bin_totals.get(KEY_ACCEPTED_GLASS, 0)
+            rvm_stats = stats.get(rvm_id, {}) or {}
+
+            accepted_cans = self.safe_int(rvm_stats.get(KEY_ACCEPTED_CANS))
+            accepted_pet = self.safe_int(rvm_stats.get(KEY_ACCEPTED_PET))
+            accepted_glass = self.safe_int(rvm_stats.get(KEY_ACCEPTED_GLASS))
             accepted_total = accepted_cans + accepted_pet + accepted_glass
             rejects_total = sum(rejects_by_machine[rvm_id].get(key, 0) for key in REJECT_KEYS)
             denominator = accepted_total + rejects_total

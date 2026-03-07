@@ -33,3 +33,9 @@ Herstart daarna Home Assistant en voeg de integratie **Envipco RVM** toe.
 ## Belangrijk
 
 Deze integratie gebruikt nieuwe entity-id's en een nieuw domein. Daardoor moet je bestaande dashboards en automations aanpassen.
+
+
+## GitHub / HACS
+
+Voor HACS moet deze volledige fileset in de root van je GitHub repository staan.
+Maak daarna een nieuwe tag en release aan met exact dezelfde versie als in `manifest.json`, dus `v1.0.10`.

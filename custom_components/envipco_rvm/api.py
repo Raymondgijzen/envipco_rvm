@@ -1,62 +1,122 @@
 from __future__ import annotations
 
-from datetime import timedelta
+import asyncio
+import csv
+from dataclasses import dataclass, field
+from datetime import date
+from io import StringIO
+from typing import Any
+from urllib.parse import urlencode
 
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.device_registry import async_get as async_get_device_registry
+import aiohttp
 
-from .api import EnvipcoRvmApiClient
-from .const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME, DEFAULT_SCAN_INTERVAL, DOMAIN, PLATFORMS
-from .coordinator import EnvipcoCoordinator
-
-
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    session = async_get_clientsession(hass)
-    client = EnvipcoRvmApiClient(session=session, username=entry.data[CONF_USERNAME], password=entry.data[CONF_PASSWORD])
-    coordinator = EnvipcoCoordinator(
-        hass=hass,
-        client=client,
-        entry=entry,
-        update_interval=timedelta(seconds=entry.options.get(CONF_SCAN_INTERVAL, entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))),
-    )
-    await coordinator.async_config_entry_first_refresh()
-
-    hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = {"client": client, "coordinator": coordinator}
-
-    device_registry = async_get_device_registry(hass)
-    for machine in coordinator.machines():
-        device_registry.async_get_or_create(
-            config_entry_id=entry.entry_id,
-            **coordinator.machine_device_info(machine.id),
-        )
-
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    hass.data[DOMAIN][entry.entry_id]["suppress_reload_once"] = False
-    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
-    return True
+from .const import EP_BASE
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unload_ok:
-        hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
-        if not hass.data.get(DOMAIN):
-            hass.data.pop(DOMAIN, None)
-    return unload_ok
+class EnvipcoApiError(Exception):
+    """Generic API error."""
 
 
-async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    domain_data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-    if domain_data and domain_data.get("suppress_reload_once"):
-        domain_data["suppress_reload_once"] = False
-        coordinator = domain_data.get("coordinator")
-        if coordinator is not None:
-            coordinator.entry = entry
-            await coordinator.async_request_refresh()
-        return
+@dataclass
+class EnvipcoRvmApiClient:
+    session: aiohttp.ClientSession
+    username: str
+    password: str
 
-    await async_unload_entry(hass, entry)
-    await async_setup_entry(hass, entry)
+    _api_key: str | None = None
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    async def _request_text(self, url: str) -> tuple[int, str]:
+        async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            return resp.status, await resp.text()
+
+    async def _request_json(self, url: str) -> tuple[int, Any]:
+        async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            try:
+                data = await resp.json(content_type=None)
+            except Exception:
+                data = await resp.text()
+            return resp.status, data
+
+    async def login(self) -> str:
+        query = urlencode({"username": self.username, "password": self.password})
+        url = f"{EP_BASE}/login?{query}"
+        status, data = await self._request_json(url)
+        if status != 200 or not isinstance(data, dict) or "ApiKey" not in data:
+            raise EnvipcoApiError(f"Login failed: HTTP {status} - {data}")
+        self._api_key = str(data["ApiKey"])
+        return self._api_key
+
+    async def get_api_key(self) -> str:
+        async with self._lock:
+            if self._api_key:
+                return self._api_key
+            return await self.login()
+
+    async def _ensure_key_and_retry_json(self, url_builder) -> Any:
+        api_key = await self.get_api_key()
+        url = url_builder(api_key)
+        status, data = await self._request_json(url)
+        if status in (303, 304):
+            async with self._lock:
+                self._api_key = None
+                api_key = await self.login()
+            url = url_builder(api_key)
+            status, data = await self._request_json(url)
+        if status != 200:
+            raise EnvipcoApiError(f"HTTP {status}: {data}")
+        return data
+
+    async def _ensure_key_and_retry_csv(self, url_builder) -> list[dict[str, str]]:
+        api_key = await self.get_api_key()
+        url = url_builder(api_key)
+        status, text = await self._request_text(url)
+        if status in (303, 304):
+            async with self._lock:
+                self._api_key = None
+                api_key = await self.login()
+            url = url_builder(api_key)
+            status, text = await self._request_text(url)
+        if status != 200:
+            raise EnvipcoApiError(f"HTTP {status}: {text}")
+        return [row for row in csv.DictReader(StringIO(text))]
+
+    async def rvm_stats(self, rvms: list[str], for_date: date) -> dict[str, Any]:
+        def build(api_key: str) -> str:
+            params: list[tuple[str, str]] = [("apiKey", api_key), ("rvmDate", for_date.isoformat())]
+            params.extend(("rvms", rvm_id) for rvm_id in rvms or [])
+            return f"{EP_BASE}/rvmStats?{urlencode(params)}"
+
+        data = await self._ensure_key_and_retry_json(build)
+        if isinstance(data, dict):
+            return data.get("rvmData", {}) or {}
+        return {}
+
+    async def rejects(self, rvms: list[str], start: date, end: date, include_acceptance: bool = True) -> list[dict[str, str]]:
+        def build(api_key: str) -> str:
+            params: list[tuple[str, str]] = [
+                ("apiKey", api_key),
+                ("startDate", start.isoformat()),
+                ("endDate", end.isoformat()),
+            ]
+            if include_acceptance:
+                params.append(("acceptance", "yes"))
+            params.extend(("rvms", rvm_id) for rvm_id in rvms or [])
+            return f"{EP_BASE}/rejects?{urlencode(params)}"
+
+        return await self._ensure_key_and_retry_csv(build)
+
+
+    async def site_data(self, site_id: str) -> dict[str, Any]:
+        def build(api_key: str) -> str:
+            params = [("apiKey", api_key), ("siteId", str(site_id))]
+            return f"{EP_BASE}/siteData?{urlencode(params)}"
+
+        data = await self._ensure_key_and_retry_json(build)
+        return data if isinstance(data, dict) else {}
+
+    async def rvms(self) -> list[str]:
+        data = await self.rvm_stats(rvms=[], for_date=date.today())
+        if isinstance(data, dict):
+            return sorted([str(k).strip() for k in data.keys() if str(k).strip()])
+        return []

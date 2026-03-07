@@ -220,9 +220,29 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return normalize_material(self.rvm_data(rvm_id).get(f"{BIN_MATERIAL_PREFIX}{bin_no}"))
 
     def machine_total_value(self, rvm_id: str, key: str) -> int:
+        if key == KEY_ACCEPTED_CANS:
+            return self.accepted_cans(rvm_id)
+        if key == KEY_ACCEPTED_PET:
+            return self.accepted_pet(rvm_id)
+        if key == KEY_ACCEPTED_GLASS:
+            return self.accepted_glass(rvm_id)
+        if key == "accepted_total":
+            return self.accepted_total(rvm_id)
         data = self.data or {}
         totals = (data.get("totals", {}) or {}).get(rvm_id, {}) or {}
         return self.safe_int(totals.get(key))
+
+    def accepted_cans(self, rvm_id: str) -> int:
+        return self.safe_int(self.rvm_data(rvm_id).get(KEY_ACCEPTED_CANS))
+
+    def accepted_pet(self, rvm_id: str) -> int:
+        return self.safe_int(self.rvm_data(rvm_id).get(KEY_ACCEPTED_PET))
+
+    def accepted_glass(self, rvm_id: str) -> int:
+        return self.safe_int(self.rvm_data(rvm_id).get(KEY_ACCEPTED_GLASS))
+
+    def accepted_total(self, rvm_id: str) -> int:
+        return self.accepted_cans(rvm_id) + self.accepted_pet(rvm_id) + self.accepted_glass(rvm_id)
 
     async def _async_update_machine_meta(self, stats: dict[str, Any]) -> None:
         site_ids: set[str] = set()
@@ -330,10 +350,10 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for rvm_id in self.rvm_ids():
             rvm_stats = stats.get(rvm_id, {}) or {}
 
-            accepted_cans = self.safe_int(rvm_stats.get(KEY_ACCEPTED_CANS))
-            accepted_pet = self.safe_int(rvm_stats.get(KEY_ACCEPTED_PET))
-            accepted_glass = self.safe_int(rvm_stats.get(KEY_ACCEPTED_GLASS))
-            accepted_total = accepted_cans + accepted_pet + accepted_glass
+            accepted_cans = self.accepted_cans(rvm_id)
+            accepted_pet = self.accepted_pet(rvm_id)
+            accepted_glass = self.accepted_glass(rvm_id)
+            accepted_total = self.accepted_total(rvm_id)
             rejects_total = sum(rejects_by_machine[rvm_id].get(key, 0) for key in REJECT_KEYS)
             denominator = accepted_total + rejects_total
             reject_rate = round((rejects_total / denominator) * 100, 1) if denominator else 0.0

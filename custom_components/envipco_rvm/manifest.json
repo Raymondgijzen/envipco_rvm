@@ -1,7 +1,7 @@
 {
   "domain": "envipco_rvm",
   "name": "Envipco RVM",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "documentation": "https://github.com/Raymondgijzen/envipco_rvm",
   "issue_tracker": "https://github.com/Raymondgijzen/envipco_rvm/issues",
   "requirements": [],

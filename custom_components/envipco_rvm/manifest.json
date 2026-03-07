@@ -1,7 +1,7 @@
 {
   "domain": "envipco_rvm",
   "name": "Envipco RVM",
-  "version": "1.0.4",
+  "version": "1.0.6",
   "documentation": "https://github.com/Raymondgijzen/Envipco_Eportal",
   "issue_tracker": "https://github.com/Raymondgijzen/Envipco_Eportal/issues",
   "requirements": [],

@@ -82,7 +82,14 @@ def material_label(material: str | None) -> str | None:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     coordinator: EnvipcoCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     machines_cfg = entry.options.get(CONF_MACHINES, entry.data.get(CONF_MACHINES, [])) or []
-    machines = [SensorMachineDef(id=item["id"], name=item.get("name") or item["id"]) for item in machines_cfg if item.get("id")]
+    machines: list[SensorMachineDef] = []
+    for item in machines_cfg:
+        if not isinstance(item, dict):
+            continue
+        machine_id = str(item.get("id") or "").strip()
+        if not machine_id:
+            continue
+        machines.append(SensorMachineDef(id=machine_id, name=str(item.get("name") or machine_id)))
     entities: list[SensorEntity] = []
 
     for machine in machines:

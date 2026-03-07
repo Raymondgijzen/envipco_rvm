@@ -55,10 +55,19 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._machine_meta_cache: dict[str, dict[str, Any]] = dict(
             entry.options.get(CONF_MACHINE_META, entry.data.get(CONF_MACHINE_META, {})) or {}
         )
+        self.data = {"stats": {}, "rejects": {}, "accepted": {}, "totals": {}, "machine_meta": self._machine_meta_cache}
 
     def machines(self) -> list[MachineDef]:
         raw = self.entry.options.get(CONF_MACHINES, self.entry.data.get(CONF_MACHINES, [])) or []
-        return [MachineDef(id=item["id"], name=item.get("name") or item["id"]) for item in raw if item.get("id")]
+        machines: list[MachineDef] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            machine_id = str(item.get("id") or "").strip()
+            if not machine_id:
+                continue
+            machines.append(MachineDef(id=machine_id, name=str(item.get("name") or machine_id)))
+        return machines
 
     def rvm_ids(self) -> list[str]:
         return [machine.id for machine in self.machines()]
@@ -90,7 +99,8 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return 0
 
     def rvm_data(self, rvm_id: str) -> dict[str, Any]:
-        return (self.data.get("stats", {}) or {}).get(rvm_id, {}) or {}
+        data = self.data or {}
+        return (data.get("stats", {}) or {}).get(rvm_id, {}) or {}
 
     def machine_meta(self, rvm_id: str) -> dict[str, Any]:
         return self._machine_meta_cache.get(rvm_id, {}) or {}
@@ -207,7 +217,8 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return totals
 
     def machine_total_value(self, rvm_id: str, key: str) -> int:
-        totals = (self.data.get("totals", {}) or {}).get(rvm_id, {}) or {}
+        data = self.data or {}
+        totals = (data.get("totals", {}) or {}).get(rvm_id, {}) or {}
         value = totals.get(key)
         if value is not None:
             return value
@@ -247,6 +258,8 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             }
 
             for machine in site_data.get("currentRVMs", []) or []:
+                if not isinstance(machine, dict):
+                    continue
                 serial = str(machine.get("machineSerialNumber") or "").strip()
                 if not serial:
                     continue

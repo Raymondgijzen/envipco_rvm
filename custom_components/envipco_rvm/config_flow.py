@@ -89,7 +89,8 @@ class EnvipcoRvmOptionsFlow(config_entries.OptionsFlow):
         self._pending_opts: dict = {}
 
     def _machines(self) -> list[dict]:
-        return self._pending_opts.get(CONF_MACHINES, self.entry.options.get(CONF_MACHINES, self.entry.data.get(CONF_MACHINES, []))) or []
+        raw = self._pending_opts.get(CONF_MACHINES, self.entry.options.get(CONF_MACHINES, self.entry.data.get(CONF_MACHINES, []))) or []
+        return [item for item in raw if isinstance(item, dict)]
 
     def _rates(self) -> dict:
         return self._pending_opts.get(CONF_MACHINE_RATES, self.entry.options.get(CONF_MACHINE_RATES, self.entry.data.get(CONF_MACHINE_RATES, {}))) or {}

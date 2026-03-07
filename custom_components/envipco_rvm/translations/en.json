@@ -1,0 +1,46 @@
+{
+  "title": "Envipco RVM",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to ePortal",
+        "description": "Enter your ePortal credentials. This new integration uses a new domain so old entity history from envipco_eportal stays out of the way.",
+        "data": {
+          "username": "Username",
+          "password": "Password",
+          "scan_interval": "Update interval (seconds)"
+        }
+      }
+    },
+    "abort": {"already_configured": "This ePortal connection already exists."},
+    "error": {"cannot_connect": "Cannot connect to ePortal."}
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options",
+        "description": "Scan only looks for new machines.",
+        "data": {
+          "scan_interval": "Update interval (seconds)",
+          "scan_for_new": "Scan for new machines"
+        }
+      },
+      "select_new": {
+        "title": "New machines found",
+        "description": "Select which new machines you want to add.",
+        "data": {"new_machines": "New machines"}
+      },
+      "name_new": {
+        "title": "Set names",
+        "description": "Set a name for each new machine.",
+        "data": {}
+      },
+      "rates": {
+        "title": "Machine rates",
+        "description": "Set the refund rates per machine for CAN and PET.",
+        "data": {}
+      }
+    },
+    "error": {"cannot_connect": "Cannot connect to ePortal."}
+  }
+}

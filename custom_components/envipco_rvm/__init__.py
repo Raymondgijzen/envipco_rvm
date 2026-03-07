@@ -1,63 +1,46 @@
-from __future__ import annotations
-
-from datetime import timedelta
-
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.device_registry import async_get as async_get_device_registry
-
-from .const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME, DEFAULT_SCAN_INTERVAL, DOMAIN, PLATFORMS
-from .coordinator import EnvipcoCoordinator
-
-
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    from .api import EnvipcoRvmApiClient
-
-    session = async_get_clientsession(hass)
-    client = EnvipcoRvmApiClient(session=session, username=entry.data[CONF_USERNAME], password=entry.data[CONF_PASSWORD])
-    coordinator = EnvipcoCoordinator(
-        hass=hass,
-        client=client,
-        entry=entry,
-        update_interval=timedelta(seconds=entry.options.get(CONF_SCAN_INTERVAL, entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))),
-    )
-    await coordinator.async_config_entry_first_refresh()
-
-    hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = {"client": client, "coordinator": coordinator}
-
-    device_registry = async_get_device_registry(hass)
-    for machine in coordinator.machines():
-        device_registry.async_get_or_create(
-            config_entry_id=entry.entry_id,
-            **coordinator.machine_device_info(machine.id),
-        )
-
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    hass.data[DOMAIN][entry.entry_id]["suppress_reload_once"] = False
-    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
-    return True
-
-
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unload_ok:
-        hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
-        if not hass.data.get(DOMAIN):
-            hass.data.pop(DOMAIN, None)
-    return unload_ok
-
-
-async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    domain_data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-    if domain_data and domain_data.get("suppress_reload_once"):
-        domain_data["suppress_reload_once"] = False
-        coordinator = domain_data.get("coordinator")
-        if coordinator is not None:
-            coordinator.entry = entry
-            await coordinator.async_request_refresh()
-        return
-
-    await async_unload_entry(hass, entry)
-    await async_setup_entry(hass, entry)
+{
+  "title": "Envipco RVM",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Koppelen met ePortal",
+        "description": "Vul je ePortal inloggegevens in. Deze nieuwe integratie gebruikt een nieuw domein, zodat oude entity-history van envipco_eportal niet in de weg zit.",
+        "data": {
+          "username": "Gebruikersnaam",
+          "password": "Wachtwoord",
+          "scan_interval": "Update interval (seconden)"
+        }
+      }
+    },
+    "abort": {"already_configured": "Deze ePortal koppeling bestaat al."},
+    "error": {"cannot_connect": "Kan geen verbinding maken met ePortal."}
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opties",
+        "description": "Scan zoekt alleen naar nieuwe automaten.",
+        "data": {
+          "scan_interval": "Update interval (seconden)",
+          "scan_for_new": "Scan op nieuwe automaten"
+        }
+      },
+      "select_new": {
+        "title": "Nieuwe automaten gevonden",
+        "description": "Selecteer welke nieuwe automaten je wilt toevoegen.",
+        "data": {"new_machines": "Nieuwe automaten"}
+      },
+      "name_new": {
+        "title": "Geef namen",
+        "description": "Geef een naam per nieuwe automaat.",
+        "data": {}
+      },
+      "rates": {
+        "title": "Vergoedingen per automaat",
+        "description": "Stel per automaat de vergoeding in voor CAN en PET.",
+        "data": {}
+      }
+    },
+    "error": {"cannot_connect": "Kan geen verbinding maken met ePortal."}
+  }
+}

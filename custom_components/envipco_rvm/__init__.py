@@ -30,11 +30,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     for machine in coordinator.machines():
         device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,
-            identifiers={(DOMAIN, machine.id)},
-            manufacturer="Envipco",
-            model=coordinator.machine_type(machine.id),
-            serial_number=machine.id,
-            name=coordinator.machine_device_name(machine.id),
+            **coordinator.machine_device_info(machine.id),
         )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

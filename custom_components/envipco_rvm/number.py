@@ -38,13 +38,7 @@ class BaseConfigNumber(CoordinatorEntity[EnvipcoCoordinator], NumberEntity):
 
     @property
     def device_info(self):
-        return {
-            "identifiers": {(DOMAIN, self.machine_id)},
-            "name": self.coordinator.machine_device_name(self.machine_id),
-            "manufacturer": "Envipco",
-            "model": self.coordinator.machine_type(self.machine_id),
-            "serial_number": self.machine_id,
-        }
+        return self.coordinator.machine_device_info(self.machine_id)
 
 
 class BinLimitConfigNumber(BaseConfigNumber):

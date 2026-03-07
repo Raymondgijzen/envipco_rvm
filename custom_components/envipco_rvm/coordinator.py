@@ -17,6 +17,7 @@ from .const import (
     BIN_LIMIT_PREFIX,
     BIN_MATERIAL_PREFIX,
     CONF_MACHINE_BIN_LIMITS,
+    CONF_MACHINE_META,
     CONF_MACHINE_RATES,
     CONF_MACHINES,
     DEFAULT_BIN_CAPACITY_BY_MATERIAL,
@@ -51,6 +52,9 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         super().__init__(hass, logger=__import__("logging").getLogger(__name__), name=NAME, update_interval=update_interval)
         self.client = client
         self.entry = entry
+        self._machine_meta_cache: dict[str, dict[str, Any]] = dict(
+            entry.options.get(CONF_MACHINE_META, entry.data.get(CONF_MACHINE_META, {})) or {}
+        )
 
     def machines(self) -> list[MachineDef]:
         raw = self.entry.options.get(CONF_MACHINES, self.entry.data.get(CONF_MACHINES, [])) or []
@@ -88,7 +92,14 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def rvm_data(self, rvm_id: str) -> dict[str, Any]:
         return (self.data.get("stats", {}) or {}).get(rvm_id, {}) or {}
 
+    def machine_meta(self, rvm_id: str) -> dict[str, Any]:
+        return self._machine_meta_cache.get(rvm_id, {}) or {}
+
     def machine_type(self, rvm_id: str) -> str:
+        meta = self.machine_meta(rvm_id)
+        value = str(meta.get("machine_type") or "").strip()
+        if value:
+            return value
         rvm = self.rvm_data(rvm_id)
         for key in ("RvmType", "RVMType", "MachineType", "Type", "Model"):
             value = str(rvm.get(key) or "").strip()
@@ -98,6 +109,51 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def machine_device_name(self, rvm_id: str) -> str:
         return f"{rvm_id}-{self.machine_type(rvm_id)}"
+
+    def machine_address(self, rvm_id: str) -> str | None:
+        meta = self.machine_meta(rvm_id)
+        return str(meta.get("address") or self.rvm_data(rvm_id).get("SiteInfoAddress") or "").strip() or None
+
+    def machine_postal_code(self, rvm_id: str) -> str | None:
+        meta = self.machine_meta(rvm_id)
+        return str(meta.get("postal_code") or self.rvm_data(rvm_id).get("SiteInfoPostalCode") or "").strip() or None
+
+    def machine_city(self, rvm_id: str) -> str | None:
+        meta = self.machine_meta(rvm_id)
+        return str(meta.get("city") or self.rvm_data(rvm_id).get("SiteInfoCity") or "").strip() or None
+
+    def machine_country(self, rvm_id: str) -> str | None:
+        meta = self.machine_meta(rvm_id)
+        return str(meta.get("country") or self.rvm_data(rvm_id).get("SiteInfoCountry") or "").strip() or None
+
+    def machine_add_date(self, rvm_id: str) -> str | None:
+        meta = self.machine_meta(rvm_id)
+        return str(meta.get("add_date") or "").strip() or None
+
+    def machine_site_id(self, rvm_id: str) -> str | None:
+        meta = self.machine_meta(rvm_id)
+        value = str(meta.get("site_id") or self.rvm_data(rvm_id).get("SiteId") or self.rvm_data(rvm_id).get("SiteInfoSiteId") or "").strip()
+        return value or None
+
+    def machine_site_name(self, rvm_id: str) -> str | None:
+        meta = self.machine_meta(rvm_id)
+        return str(meta.get("account_name") or "").strip() or None
+
+    def machine_device_info(self, rvm_id: str) -> dict[str, Any]:
+        rvm = self.rvm_data(rvm_id)
+        info: dict[str, Any] = {
+            "identifiers": {("envipco_rvm", rvm_id)},
+            "name": self.machine_device_name(rvm_id),
+            "manufacturer": "Envipco",
+            "model": self.machine_type(rvm_id),
+            "serial_number": rvm_id,
+            "sw_version": str(rvm.get("VersionREL") or "").strip() or None,
+            "hw_version": str(rvm.get("VersionMCX") or "").strip() or None,
+        }
+        city = self.machine_city(rvm_id)
+        if city:
+            info["suggested_area"] = city
+        return info
 
     def active_bins(self, rvm_id: str) -> list[int]:
         rvm = self.rvm_data(rvm_id)
@@ -160,9 +216,64 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return sum(bin_totals.values())
         return bin_totals.get(key, 0)
 
+    async def _async_update_machine_meta(self, stats: dict[str, Any]) -> None:
+        site_ids: set[str] = set()
+        for rvm_id in self.rvm_ids():
+            if self.machine_meta(rvm_id).get("machine_type") and self.machine_meta(rvm_id).get("add_date"):
+                continue
+            rvm = stats.get(rvm_id, {}) or {}
+            site_id = str(rvm.get("SiteId") or rvm.get("SiteInfoSiteId") or "").strip()
+            if site_id:
+                site_ids.add(site_id)
+
+        if not site_ids:
+            return
+
+        new_meta = dict(self._machine_meta_cache)
+        changed = False
+        for site_id in sorted(site_ids):
+            try:
+                site_data = await self.client.site_data(site_id)
+            except Exception:
+                continue
+
+            site_common = {
+                "site_id": str(site_data.get("siteId") or site_id).strip() or site_id,
+                "account_name": str(site_data.get("accountName") or "").strip() or None,
+                "address": str(site_data.get("address") or "").strip() or None,
+                "postal_code": str(site_data.get("postalCode") or "").strip() or None,
+                "city": str(site_data.get("city") or "").strip() or None,
+                "country": str(site_data.get("country") or "").strip() or None,
+            }
+
+            for machine in site_data.get("currentRVMs", []) or []:
+                serial = str(machine.get("machineSerialNumber") or "").strip()
+                if not serial:
+                    continue
+                remove_date = str(machine.get("removeDate") or "").strip()
+                if remove_date:
+                    continue
+                existing = dict(new_meta.get(serial, {}) or {})
+                merged = {
+                    **existing,
+                    **{k: v for k, v in site_common.items() if v},
+                    "machine_type": str(machine.get("machineType") or existing.get("machine_type") or "").strip() or existing.get("machine_type"),
+                    "add_date": str(machine.get("addDate") or existing.get("add_date") or "").strip() or existing.get("add_date"),
+                }
+                if merged != existing:
+                    new_meta[serial] = merged
+                    changed = True
+
+        if changed:
+            self._machine_meta_cache = new_meta
+            options = dict(self.entry.options)
+            options[CONF_MACHINE_META] = new_meta
+            self.hass.config_entries.async_update_entry(self.entry, options=options)
+
     async def _async_update_data(self) -> dict[str, Any]:
         try:
             stats = await self.client.rvm_stats(self.rvm_ids(), date.today())
+            await self._async_update_machine_meta(stats)
             rejects_rows = await self.client.rejects(self.rvm_ids(), date.today(), date.today(), include_acceptance=True)
         except EnvipcoApiError as err:
             raise UpdateFailed(str(err)) from err
@@ -219,4 +330,5 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "rejects": {k: dict(v) for k, v in rejects_by_machine.items()},
             "accepted": {k: dict(v) for k, v in accepted_by_machine.items()},
             "totals": totals,
+            "machine_meta": self._machine_meta_cache,
         }

@@ -106,6 +106,15 @@ class EnvipcoRvmApiClient:
 
         return await self._ensure_key_and_retry_csv(build)
 
+
+    async def site_data(self, site_id: str) -> dict[str, Any]:
+        def build(api_key: str) -> str:
+            params = [("apiKey", api_key), ("siteId", str(site_id))]
+            return f"{EP_BASE}/siteData?{urlencode(params)}"
+
+        data = await self._ensure_key_and_retry_json(build)
+        return data if isinstance(data, dict) else {}
+
     async def rvms(self) -> list[str]:
         data = await self.rvm_stats(rvms=[], for_date=date.today())
         if isinstance(data, dict):

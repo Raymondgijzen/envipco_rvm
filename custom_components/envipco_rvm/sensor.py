@@ -121,16 +121,7 @@ class BaseSensor(CoordinatorEntity[EnvipcoCoordinator], SensorEntity):
 
     @property
     def device_info(self):
-        rvm = self._rvm()
-        return {
-            "identifiers": {(DOMAIN, self.machine.id)},
-            "name": self.coordinator.machine_device_name(self.machine.id),
-            "manufacturer": "Envipco",
-            "model": self.coordinator.machine_type(self.machine.id),
-            "serial_number": self.machine.id,
-            "sw_version": str(rvm.get("VersionREL") or "").strip() or None,
-            "hw_version": str(rvm.get("VersionMCX") or "").strip() or None,
-        }
+        return self.coordinator.machine_device_info(self.machine.id)
 
     def _rvm(self) -> dict[str, Any]:
         return self.coordinator.rvm_data(self.machine.id)
@@ -315,24 +306,25 @@ class LocationInfoSensor(BaseSensor):
 
     @property
     def native_value(self):
-        rvm = self._rvm()
-        address = str(rvm.get("SiteInfoAddress") or "").strip()
-        postal = str(rvm.get("SiteInfoPostalCode") or "").strip()
-        city = str(rvm.get("SiteInfoCity") or "").strip()
+        address = self.coordinator.machine_address(self.machine.id) or ""
+        postal = self.coordinator.machine_postal_code(self.machine.id) or ""
+        city = self.coordinator.machine_city(self.machine.id) or ""
         city_line = " ".join(part for part in [postal, city] if part).strip()
         return ", ".join(part for part in [address, city_line] if part) or None
 
     @property
     def extra_state_attributes(self):
-        rvm = self._rvm()
         return {
             "machine_naam": self.coordinator.machine_device_name(self.machine.id),
             "machine_id": self.machine.id,
             "machine_type": self.coordinator.machine_type(self.machine.id),
-            "adres": rvm.get("SiteInfoAddress"),
-            "postcode": rvm.get("SiteInfoPostalCode"),
-            "plaats": rvm.get("SiteInfoCity"),
-            "land": rvm.get("SiteInfoCountry"),
+            "adres": self.coordinator.machine_address(self.machine.id),
+            "postcode": self.coordinator.machine_postal_code(self.machine.id),
+            "plaats": self.coordinator.machine_city(self.machine.id),
+            "land": self.coordinator.machine_country(self.machine.id),
+            "add_date": self.coordinator.machine_add_date(self.machine.id),
+            "site_id": self.coordinator.machine_site_id(self.machine.id),
+            "account_name": self.coordinator.machine_site_name(self.machine.id),
         }
 
 

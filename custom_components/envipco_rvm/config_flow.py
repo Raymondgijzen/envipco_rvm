@@ -10,6 +10,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .api import EnvipcoRvmApiClient
 from .const import (
     CONF_MACHINE_BIN_LIMITS,
+    CONF_MACHINE_META,
     CONF_MACHINE_RATES,
     CONF_MACHINES,
     CONF_PASSWORD,
@@ -64,6 +65,7 @@ class EnvipcoRvmConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         machine_rates = {rid: {"can": DEFAULT_RATE_CAN, "pet": DEFAULT_RATE_PET} for rid in rvms}
         machine_bin_limits = {rid: {} for rid in rvms}
         data = {
+            CONF_MACHINE_META: {},
             CONF_USERNAME: user_input[CONF_USERNAME],
             CONF_PASSWORD: user_input[CONF_PASSWORD],
             CONF_SCAN_INTERVAL: user_input.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
@@ -91,6 +93,9 @@ class EnvipcoRvmOptionsFlow(config_entries.OptionsFlow):
 
     def _rates(self) -> dict:
         return self._pending_opts.get(CONF_MACHINE_RATES, self.entry.options.get(CONF_MACHINE_RATES, self.entry.data.get(CONF_MACHINE_RATES, {}))) or {}
+
+    def _machine_meta(self) -> dict:
+        return self._pending_opts.get(CONF_MACHINE_META, self.entry.options.get(CONF_MACHINE_META, self.entry.data.get(CONF_MACHINE_META, {}))) or {}
 
     def _bin_limits(self) -> dict:
         return self._pending_opts.get(CONF_MACHINE_BIN_LIMITS, self.entry.options.get(CONF_MACHINE_BIN_LIMITS, self.entry.data.get(CONF_MACHINE_BIN_LIMITS, {}))) or {}
@@ -191,4 +196,5 @@ class EnvipcoRvmOptionsFlow(config_entries.OptionsFlow):
         self._pending_opts[CONF_MACHINES] = machines
         self._pending_opts[CONF_MACHINE_RATES] = new_rates
         self._pending_opts.setdefault(CONF_MACHINE_BIN_LIMITS, self._bin_limits())
+        self._pending_opts.setdefault(CONF_MACHINE_META, self._machine_meta())
         return self.async_create_entry(title="", data=self._pending_opts)

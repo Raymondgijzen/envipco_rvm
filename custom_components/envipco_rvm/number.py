@@ -1,3 +1,9 @@
+"""Number entities for writable machine configuration.
+
+These entities change Home Assistant stored options only.
+The coordinator then refreshes and recalculates the live derived values.
+"""
+
 from __future__ import annotations
 
 from homeassistant.components.number import NumberEntity
@@ -16,6 +22,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     coordinator: EnvipcoCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     machines_cfg = entry.options.get(CONF_MACHINES, entry.data.get(CONF_MACHINES, [])) or []
     entities: list[NumberEntity] = []
+    # Number entities are only used for local configuration values.
+    # Nothing is written back to the Envipco portal.
     for machine in machines_cfg:
         machine_id = machine.get("id")
         if not machine_id:

@@ -1,3 +1,9 @@
+"""Home Assistant entry setup for Envipco RVM.
+
+This module wires together the API client, coordinator and platforms.
+It also nudges entity/device names in the registry toward stable technical names.
+"""
+
 from __future__ import annotations
 
 from datetime import timedelta
@@ -9,10 +15,15 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.util import slugify
 from homeassistant.helpers.device_registry import async_get as async_get_device_registry
 
-from .const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME, DEFAULT_SCAN_INTERVAL, DOMAIN, PLATFORMS
+from .const import (
+    CONF_PASSWORD,
+    CONF_RVMSTATS_INTERVAL,
+    CONF_USERNAME,
+    DEFAULT_RVMSTATS_INTERVAL,
+    DOMAIN,
+    PLATFORMS,
+)
 from .coordinator import EnvipcoCoordinator
-
-
 
 
 async def _async_apply_registry_naming(hass: HomeAssistant, entry: ConfigEntry, coordinator: EnvipcoCoordinator) -> None:
@@ -48,6 +59,7 @@ async def _async_apply_registry_naming(hass: HomeAssistant, entry: ConfigEntry, 
             except Exception:
                 pass
 
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .api import EnvipcoRvmApiClient
 
@@ -57,9 +69,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass=hass,
         client=client,
         entry=entry,
-        update_interval=timedelta(seconds=entry.options.get(CONF_SCAN_INTERVAL, entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))),
+        update_interval=timedelta(seconds=entry.options.get(CONF_RVMSTATS_INTERVAL, entry.data.get(CONF_RVMSTATS_INTERVAL, DEFAULT_RVMSTATS_INTERVAL))),
     )
     await coordinator.async_config_entry_first_refresh()
+    await coordinator.async_refresh_machine_meta_once(force=True)
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {"client": client, "coordinator": coordinator}
@@ -94,6 +107,7 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         coordinator = domain_data.get("coordinator")
         if coordinator is not None:
             coordinator.entry = entry
+            coordinator.update_interval = timedelta(seconds=entry.options.get(CONF_RVMSTATS_INTERVAL, entry.data.get(CONF_RVMSTATS_INTERVAL, DEFAULT_RVMSTATS_INTERVAL)))
             await coordinator.async_request_refresh()
         return
 

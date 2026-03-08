@@ -1,7 +1,14 @@
+"""Low-level Envipco ePortal API client.
+
+This module only talks to the remote API and parses responses.
+No Home Assistant entity logic belongs here.
+"""
+
 from __future__ import annotations
 
 import asyncio
 import csv
+import re
 from dataclasses import dataclass, field
 from datetime import date
 from io import StringIO
@@ -17,6 +24,14 @@ class EnvipcoApiError(Exception):
     """Generic API error."""
 
 
+class EnvipcoThrottleError(EnvipcoApiError):
+    """API throttled; try again later."""
+
+    def __init__(self, seconds: int | None, message: str) -> None:
+        super().__init__(message)
+        self.seconds = seconds or 60
+
+
 @dataclass
 class EnvipcoRvmApiClient:
     session: aiohttp.ClientSession
@@ -25,6 +40,17 @@ class EnvipcoRvmApiClient:
 
     _api_key: str | None = None
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    @staticmethod
+    def _extract_retry_seconds(payload: Any) -> int | None:
+        text = str(payload)
+        match = re.search(r"Expected available in\s+(\d+)\s+seconds", text, re.IGNORECASE)
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                return None
+        return None
 
     async def _request_text(self, url: str) -> tuple[int, str]:
         async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
@@ -63,6 +89,8 @@ class EnvipcoRvmApiClient:
                 api_key = await self.login()
             url = url_builder(api_key)
             status, data = await self._request_json(url)
+        if status == 429:
+            raise EnvipcoThrottleError(self._extract_retry_seconds(data), f"HTTP 429: {data}")
         if status != 200:
             raise EnvipcoApiError(f"HTTP {status}: {data}")
         return data
@@ -77,6 +105,8 @@ class EnvipcoRvmApiClient:
                 api_key = await self.login()
             url = url_builder(api_key)
             status, text = await self._request_text(url)
+        if status == 429:
+            raise EnvipcoThrottleError(self._extract_retry_seconds(text), f"HTTP 429: {text}")
         if status != 200:
             raise EnvipcoApiError(f"HTTP {status}: {text}")
         return [row for row in csv.DictReader(StringIO(text))]
@@ -105,7 +135,6 @@ class EnvipcoRvmApiClient:
             return f"{EP_BASE}/rejects?{urlencode(params)}"
 
         return await self._ensure_key_and_retry_csv(build)
-
 
     async def site_data(self, site_id: str) -> dict[str, Any]:
         def build(api_key: str) -> str:

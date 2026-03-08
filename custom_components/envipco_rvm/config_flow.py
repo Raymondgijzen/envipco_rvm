@@ -1,3 +1,12 @@
+"""Config and options flow for the Envipco RVM integration.
+
+Setup is intentionally split into simple steps:
+- validate login
+- discover machines
+- store per-machine rates
+- keep site metadata refresh outside regular polling
+"""
+
 from __future__ import annotations
 
 import voluptuous as vol
@@ -13,11 +22,13 @@ from .const import (
     CONF_MACHINE_RATES,
     CONF_MACHINES,
     CONF_PASSWORD,
-    CONF_SCAN_INTERVAL,
+    CONF_REJECTS_INTERVAL,
+    CONF_RVMSTATS_INTERVAL,
     CONF_USERNAME,
     DEFAULT_RATE_CAN,
     DEFAULT_RATE_PET,
-    DEFAULT_SCAN_INTERVAL,
+    DEFAULT_REJECTS_INTERVAL,
+    DEFAULT_RVMSTATS_INTERVAL,
     DOMAIN,
     NAME,
 )
@@ -34,7 +45,8 @@ class EnvipcoRvmConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     {
                         vol.Required(CONF_USERNAME): str,
                         vol.Required(CONF_PASSWORD): str,
-                        vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): vol.All(int, vol.Range(min=60, max=3600)),
+                        vol.Optional(CONF_RVMSTATS_INTERVAL, default=DEFAULT_RVMSTATS_INTERVAL): vol.All(int, vol.Range(min=60, max=3600)),
+                        vol.Optional(CONF_REJECTS_INTERVAL, default=DEFAULT_REJECTS_INTERVAL): vol.All(int, vol.Range(min=300, max=86400)),
                     }
                 ),
             )
@@ -56,7 +68,8 @@ class EnvipcoRvmConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     {
                         vol.Required(CONF_USERNAME, default=user_input[CONF_USERNAME]): str,
                         vol.Required(CONF_PASSWORD, default=user_input[CONF_PASSWORD]): str,
-                        vol.Optional(CONF_SCAN_INTERVAL, default=user_input.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)): vol.All(int, vol.Range(min=60, max=3600)),
+                        vol.Optional(CONF_RVMSTATS_INTERVAL, default=user_input.get(CONF_RVMSTATS_INTERVAL, DEFAULT_RVMSTATS_INTERVAL)): vol.All(int, vol.Range(min=60, max=3600)),
+                        vol.Optional(CONF_REJECTS_INTERVAL, default=user_input.get(CONF_REJECTS_INTERVAL, DEFAULT_REJECTS_INTERVAL)): vol.All(int, vol.Range(min=300, max=86400)),
                     }
                 ),
                 errors={"base": "cannot_connect"},
@@ -69,7 +82,8 @@ class EnvipcoRvmConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_MACHINE_META: {},
             CONF_USERNAME: user_input[CONF_USERNAME],
             CONF_PASSWORD: user_input[CONF_PASSWORD],
-            CONF_SCAN_INTERVAL: user_input.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+            CONF_RVMSTATS_INTERVAL: user_input.get(CONF_RVMSTATS_INTERVAL, DEFAULT_RVMSTATS_INTERVAL),
+            CONF_REJECTS_INTERVAL: user_input.get(CONF_REJECTS_INTERVAL, DEFAULT_REJECTS_INTERVAL),
             CONF_MACHINES: machines,
             CONF_MACHINE_RATES: machine_rates,
             CONF_MACHINE_BIN_LIMITS: machine_bin_limits,
@@ -103,19 +117,23 @@ class EnvipcoRvmOptionsFlow(config_entries.OptionsFlow):
         return self._pending_opts.get(CONF_MACHINE_BIN_LIMITS, self.entry.options.get(CONF_MACHINE_BIN_LIMITS, self.entry.data.get(CONF_MACHINE_BIN_LIMITS, {}))) or {}
 
     async def async_step_init(self, user_input=None):
+        stats_default = self.entry.options.get(CONF_RVMSTATS_INTERVAL, self.entry.data.get(CONF_RVMSTATS_INTERVAL, DEFAULT_RVMSTATS_INTERVAL))
+        rejects_default = self.entry.options.get(CONF_REJECTS_INTERVAL, self.entry.data.get(CONF_REJECTS_INTERVAL, DEFAULT_REJECTS_INTERVAL))
         if user_input is None:
             return self.async_show_form(
                 step_id="init",
                 data_schema=vol.Schema(
                     {
-                        vol.Optional(CONF_SCAN_INTERVAL, default=self.entry.options.get(CONF_SCAN_INTERVAL, self.entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))): vol.All(int, vol.Range(min=60, max=3600)),
+                        vol.Optional(CONF_RVMSTATS_INTERVAL, default=stats_default): vol.All(int, vol.Range(min=60, max=3600)),
+                        vol.Optional(CONF_REJECTS_INTERVAL, default=rejects_default): vol.All(int, vol.Range(min=300, max=86400)),
                         vol.Optional("scan_for_new", default=False): bool,
                     }
                 ),
             )
 
         self._pending_opts = dict(self.entry.options)
-        self._pending_opts[CONF_SCAN_INTERVAL] = user_input[CONF_SCAN_INTERVAL]
+        self._pending_opts[CONF_RVMSTATS_INTERVAL] = user_input[CONF_RVMSTATS_INTERVAL]
+        self._pending_opts[CONF_REJECTS_INTERVAL] = user_input[CONF_REJECTS_INTERVAL]
 
         if user_input.get("scan_for_new"):
             from .api import EnvipcoRvmApiClient
@@ -129,7 +147,8 @@ class EnvipcoRvmOptionsFlow(config_entries.OptionsFlow):
                     step_id="init",
                     data_schema=vol.Schema(
                         {
-                            vol.Optional(CONF_SCAN_INTERVAL, default=user_input[CONF_SCAN_INTERVAL]): vol.All(int, vol.Range(min=60, max=3600)),
+                            vol.Optional(CONF_RVMSTATS_INTERVAL, default=user_input[CONF_RVMSTATS_INTERVAL]): vol.All(int, vol.Range(min=60, max=3600)),
+                            vol.Optional(CONF_REJECTS_INTERVAL, default=user_input[CONF_REJECTS_INTERVAL]): vol.All(int, vol.Range(min=300, max=86400)),
                             vol.Optional("scan_for_new", default=True): bool,
                         }
                     ),

@@ -1,3 +1,10 @@
+"""Sensor platform for Envipco RVM.
+
+This file intentionally keeps entity classes thin.
+Complex API logic and derived calculations live in the coordinator,
+so sensors stay predictable and easier to debug.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -93,11 +100,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         machines.append(SensorMachineDef(id=machine_id, name=str(item.get("name") or machine_id)))
     entities: list[SensorEntity] = []
 
+    # Each RVM gets its own machine-oriented entity set.
+    # The coordinator does the heavy lifting; the entities mostly expose values cleanly.
     for machine in machines:
         entities.extend([
             StatusSensor(coordinator, machine),
             LastReportSensor(coordinator, machine),
             LastReportTextSensor(coordinator, machine),
+            LastSuccessfulUpdateSensor(coordinator, machine),
+            ApiThrottleStatusSensor(coordinator, machine),
+            ApiThrottleSecondsSensor(coordinator, machine),
             AcceptedTotalSensor(coordinator, machine),
             AcceptedCansSensor(coordinator, machine),
             AcceptedPetSensor(coordinator, machine),
@@ -182,6 +194,60 @@ class LastReportTextSensor(BaseSensor):
     @property
     def native_value(self):
         return format_local(parse_timestamp(get_last_report_raw(self._rvm())))
+
+
+class LastSuccessfulUpdateSensor(BaseSensor):
+    _attr_name = "Laatste succesvolle update"
+    _attr_icon = "mdi:update"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator, machine):
+        super().__init__(coordinator, machine)
+        self._attr_unique_id = f"{machine.id}_last_successful_update"
+
+    @property
+    def native_value(self):
+        return parse_timestamp(self.coordinator.last_successful_update)
+
+
+class ApiThrottleStatusSensor(BaseSensor):
+    _attr_name = "API throttling"
+    _attr_icon = "mdi:speedometer-slow"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator, machine):
+        super().__init__(coordinator, machine)
+        self._attr_unique_id = f"{machine.id}_api_throttle_status"
+
+    @property
+    def native_value(self):
+        return self.coordinator.throttle_status_text
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "rvmstats_geremd": self.coordinator.stats_throttled,
+            "rvmstats_resterend_seconden": self.coordinator.stats_throttle_remaining,
+            "rejects_geremd": self.coordinator.rejects_throttled,
+            "rejects_resterend_seconden": self.coordinator.rejects_throttle_remaining,
+            "laatste_fout": self.coordinator.last_error,
+        }
+
+
+class ApiThrottleSecondsSensor(BaseSensor):
+    _attr_name = "API throttle resterend"
+    _attr_icon = "mdi:timer-sand"
+    _attr_native_unit_of_measurement = "s"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator, machine):
+        super().__init__(coordinator, machine)
+        self._attr_unique_id = f"{machine.id}_api_throttle_remaining"
+
+    @property
+    def native_value(self):
+        return max(self.coordinator.stats_throttle_remaining, self.coordinator.rejects_throttle_remaining)
 
 
 class AcceptedTotalSensor(BaseSensor):

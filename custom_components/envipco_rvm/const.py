@@ -2,17 +2,19 @@ from __future__ import annotations
 
 DOMAIN = "envipco_rvm"
 NAME = "Envipco RVM"
-VERSION = "1.0.15"
+VERSION = "1.0.17"
 
 CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
-CONF_SCAN_INTERVAL = "scan_interval"
+CONF_RVMSTATS_INTERVAL = "rvmstats_interval"
+CONF_REJECTS_INTERVAL = "rejects_interval"
 CONF_MACHINES = "machines"
 CONF_MACHINE_RATES = "machine_rates"
 CONF_MACHINE_BIN_LIMITS = "machine_bin_limits"
 CONF_MACHINE_META = "machine_meta"
 
-DEFAULT_SCAN_INTERVAL = 300
+DEFAULT_RVMSTATS_INTERVAL = 300
+DEFAULT_REJECTS_INTERVAL = 900
 DEFAULT_RATE_CAN = 0.0107
 DEFAULT_RATE_PET = 0.0331
 

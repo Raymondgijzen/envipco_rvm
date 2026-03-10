@@ -3,19 +3,17 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+import logging
 import re
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-import logging
 
 from .api import EnvipcoApiError, EnvipcoRvmApiClient, EnvipcoThrottleError
 from .const import (
     ACCEPT_FIELDS_PREFIX,
-    BIN_COUNT_PREFIX,
-    BIN_FULL_PREFIX,
     BIN_LIMIT_PREFIX,
     BIN_MATERIAL_PREFIX,
     CONF_MACHINE_BIN_LIMITS,
@@ -54,15 +52,15 @@ def normalize_material(raw: Any) -> str | None:
 
 
 class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Central place for all API polling and derived calculations.
+    """Central place for all API polling and derived calculations."""
 
-    Design choice:
-    - rvmStats is the primary live data source
-    - rejects is fetched on its own slower interval
-    - siteData is *not* fetched on every poll and is only refreshed when explicitly needed
-    """
-
-    def __init__(self, hass: HomeAssistant, client: EnvipcoRvmApiClient, entry: ConfigEntry, update_interval) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        client: EnvipcoRvmApiClient,
+        entry: ConfigEntry,
+        update_interval,
+    ) -> None:
         super().__init__(hass, logger=_LOGGER, name=NAME, update_interval=update_interval)
         self.client = client
         self.entry = entry
@@ -85,15 +83,18 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @staticmethod
     def _row_get_case_insensitive(row: dict[str, Any], *candidates: str) -> Any:
-        lowered = {str(k).lower(): v for k, v in row.items()}
+        lowered = {str(key).lower(): value for key, value in row.items()}
         for candidate in candidates:
             value = lowered.get(str(candidate).lower())
             if value is not None:
                 return value
         return None
 
+    def _entry_value(self, key: str, default: Any) -> Any:
+        return self.entry.options.get(key, self.entry.data.get(key, default))
+
     def machines(self) -> list[MachineDef]:
-        raw = self.entry.options.get(CONF_MACHINES, self.entry.data.get(CONF_MACHINES, [])) or []
+        raw = self._entry_value(CONF_MACHINES, []) or []
         machines: list[MachineDef] = []
         for item in raw:
             if not isinstance(item, dict):
@@ -108,12 +109,12 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return [machine.id for machine in self.machines()]
 
     def machine_rates(self, rvm_id: str) -> tuple[float, float]:
-        rates = self.entry.options.get(CONF_MACHINE_RATES, {}) or {}
+        rates = self._entry_value(CONF_MACHINE_RATES, {}) or {}
         item = rates.get(rvm_id, {}) or {}
         return float(item.get("can", DEFAULT_RATE_CAN)), float(item.get("pet", DEFAULT_RATE_PET))
 
     def machine_bin_limits(self, rvm_id: str) -> dict[str, int]:
-        all_limits = self.entry.options.get(CONF_MACHINE_BIN_LIMITS, {}) or {}
+        all_limits = self._entry_value(CONF_MACHINE_BIN_LIMITS, {}) or {}
         machine_limits = all_limits.get(rvm_id, {}) or {}
         cleaned: dict[str, int] = {}
         for key, value in machine_limits.items():
@@ -153,6 +154,10 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return "RVM"
 
     def machine_device_name(self, rvm_id: str) -> str:
+        configured_names = {machine.id: machine.name for machine in self.machines()}
+        configured_name = str(configured_names.get(rvm_id) or "").strip()
+        if configured_name:
+            return configured_name
         return f"{rvm_id}-{self.machine_type(rvm_id)}"
 
     def machine_address(self, rvm_id: str) -> str | None:
@@ -177,7 +182,12 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def machine_site_id(self, rvm_id: str) -> str | None:
         meta = self.machine_meta(rvm_id)
-        value = str(meta.get("site_id") or self.rvm_data(rvm_id).get("SiteId") or self.rvm_data(rvm_id).get("SiteInfoSiteId") or "").strip()
+        value = str(
+            meta.get("site_id")
+            or self.rvm_data(rvm_id).get("SiteId")
+            or self.rvm_data(rvm_id).get("SiteInfoSiteId")
+            or ""
+        ).strip()
         return value or None
 
     def machine_site_name(self, rvm_id: str) -> str | None:
@@ -201,21 +211,13 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return info
 
     def active_bins(self, rvm_id: str) -> list[int]:
-        """Return only bins that are actually configured/used by the machine.
+        """Return only bins that are actually configured/used.
 
-        Important design choice:
-        the API documentation shows that unused bins normally have an empty
-        ``BinInfoMaterialBinX`` value, while active bins expose a material such
-        as PET, ALU/CAN or GLASS. The old implementation also treated non-zero
-        count/full values as a signal, which could surface ghost bins in Home
-        Assistant when the portal returned leftover numeric values.
-
-        We therefore use the machine configuration itself as the primary truth:
-        1. material configured in the API -> active bin
-        2. explicit API limit configured -> active bin
-        3. explicit user-configured HA limit -> active bin
-
-        This keeps the dashboard focused on bins that are genuinely in use.
+        Een bin kan leeg zijn omdat hij net is geleegd.
+        Daarom gebruiken we voor ronde 1 alleen:
+        - materiaal aanwezig
+        - API limiet > 0
+        - lokale ingestelde limiet > 0
         """
         rvm = self.rvm_data(rvm_id)
         active: list[int] = []
@@ -227,11 +229,9 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if material:
                 active.append(bin_no)
                 continue
-
             if api_limit > 0:
                 active.append(bin_no)
                 continue
-
             if configured_limit is not None and configured_limit > 0:
                 active.append(bin_no)
 
@@ -241,12 +241,15 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         configured = self.configured_bin_limit(rvm_id, bin_no)
         if configured is not None:
             return configured
+
         api_value = self.safe_int(self.rvm_data(rvm_id).get(f"{BIN_LIMIT_PREFIX}{bin_no}"))
         if api_value > 0:
             return api_value
+
         material = normalize_material(self.rvm_data(rvm_id).get(f"{BIN_MATERIAL_PREFIX}{bin_no}"))
         if material:
             return DEFAULT_BIN_CAPACITY_BY_MATERIAL.get(material)
+
         return None
 
     def bin_material(self, rvm_id: str, bin_no: int) -> str | None:
@@ -261,6 +264,7 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return self.accepted_glass(rvm_id)
         if key == "accepted_total":
             return self.accepted_total(rvm_id)
+
         data = self.data or {}
         totals = (data.get("totals", {}) or {}).get(rvm_id, {}) or {}
         return self.safe_int(totals.get(key))
@@ -277,12 +281,67 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def accepted_total(self, rvm_id: str) -> int:
         return self.accepted_cans(rvm_id) + self.accepted_pet(rvm_id) + self.accepted_glass(rvm_id)
 
+    @property
+    def last_successful_update(self) -> datetime | None:
+        return self._last_successful_update
+
+    @property
+    def last_error(self) -> str | None:
+        return self._last_error
+
+    @property
+    def stats_throttled(self) -> bool:
+        return self.stats_throttle_remaining > 0
+
+    @property
+    def rejects_throttled(self) -> bool:
+        return self.rejects_throttle_remaining > 0
+
+    @property
+    def stats_throttle_remaining(self) -> int:
+        if not self._stats_throttle_until:
+            return 0
+        seconds = int((self._stats_throttle_until - datetime.utcnow()).total_seconds())
+        return max(0, seconds)
+
+    @property
+    def rejects_throttle_remaining(self) -> int:
+        if not self._rejects_throttle_until:
+            return 0
+        seconds = int((self._rejects_throttle_until - datetime.utcnow()).total_seconds())
+        return max(0, seconds)
+
+    @property
+    def throttle_status_text(self) -> str:
+        if self.stats_throttled and self.rejects_throttled:
+            return "Stats en rejects geremd"
+        if self.stats_throttled:
+            return "Stats geremd"
+        if self.rejects_throttled:
+            return "Rejects geremd"
+        return "OK"
+
+    def _extract_remaining_seconds(self, text: str) -> int | None:
+        match = re.search(r"(\d+)\s*seconds?", text or "", re.IGNORECASE)
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except (TypeError, ValueError):
+            return None
+
     async def async_refresh_machine_meta_once(self, force: bool = False) -> None:
         site_ids: set[str] = set()
         stats = (self.data or {}).get("stats", {}) or {}
+
         for rvm_id in self.rvm_ids():
-            if not force and self.machine_meta(rvm_id).get("machine_type") and self.machine_meta(rvm_id).get("add_date"):
+            if (
+                not force
+                and self.machine_meta(rvm_id).get("machine_type")
+                and self.machine_meta(rvm_id).get("add_date")
+            ):
                 continue
+
             rvm = stats.get(rvm_id, {}) or {}
             site_id = str(rvm.get("SiteId") or rvm.get("SiteInfoSiteId") or "").strip()
             if site_id:
@@ -291,13 +350,18 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not site_ids:
             return
 
+        selected_ids = set(self.rvm_ids())
         new_meta = dict(self._machine_meta_cache)
         changed = False
+
         for site_id in sorted(site_ids):
             try:
                 site_data = await self.client.site_data(site_id)
             except EnvipcoThrottleError as err:
-                _LOGGER.warning("siteData tijdelijk geremd door API (%s sec); metadata-update wordt later opnieuw geprobeerd", err.seconds)
+                _LOGGER.warning(
+                    "siteData tijdelijk geremd door API (%s sec); metadata-update wordt later opnieuw geprobeerd",
+                    err.seconds,
+                )
                 return
             except Exception:
                 continue
@@ -314,18 +378,25 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for machine in site_data.get("currentRVMs", []) or []:
                 if not isinstance(machine, dict):
                     continue
+
                 serial = str(machine.get("machineSerialNumber") or "").strip()
-                if not serial:
+                if not serial or serial not in selected_ids:
                     continue
+
                 remove_date = str(machine.get("removeDate") or "").strip()
                 if remove_date:
                     continue
+
                 existing = dict(new_meta.get(serial, {}) or {})
                 merged = {
                     **existing,
-                    **{k: v for k, v in site_common.items() if v},
-                    "machine_type": str(machine.get("machineType") or existing.get("machine_type") or "").strip() or existing.get("machine_type"),
-                    "add_date": str(machine.get("addDate") or existing.get("add_date") or "").strip() or existing.get("add_date"),
+                    **{key: value for key, value in site_common.items() if value},
+                    "machine_type": str(
+                        machine.get("machineType") or existing.get("machine_type") or ""
+                    ).strip() or existing.get("machine_type"),
+                    "add_date": str(
+                        machine.get("addDate") or existing.get("add_date") or ""
+                    ).strip() or existing.get("add_date"),
                 }
                 if merged != existing:
                     new_meta[serial] = merged
@@ -339,34 +410,56 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.entry = self.hass.config_entries.async_get_entry(self.entry.entry_id) or self.entry
 
     def _rejects_interval_seconds(self) -> int:
-        return int(self.entry.options.get(CONF_REJECTS_INTERVAL, self.entry.data.get(CONF_REJECTS_INTERVAL, DEFAULT_REJECTS_INTERVAL)))
+        return int(self._entry_value(CONF_REJECTS_INTERVAL, DEFAULT_REJECTS_INTERVAL))
 
     async def _get_rejects_rows(self) -> list[dict[str, str]]:
         now = datetime.utcnow()
+
         if self._last_rejects_fetch and (now - self._last_rejects_fetch).total_seconds() < self._rejects_interval_seconds():
             return self._rejects_cache
+
         if self._rejects_throttle_until and now < self._rejects_throttle_until:
             return self._rejects_cache
+
         try:
-            rows = await self.client.rejects(self.rvm_ids(), date.today(), date.today(), include_acceptance=True)
+            rows = await self.client.rejects(
+                self.rvm_ids(),
+                date.today(),
+                date.today(),
+                include_acceptance=True,
+            )
             self._rejects_cache = rows
             self._last_rejects_fetch = now
             self._rejects_throttle_until = None
             return rows
         except EnvipcoThrottleError as err:
             self._rejects_throttle_until = now + timedelta(seconds=err.seconds)
-            _LOGGER.warning("Rejects tijdelijk geremd door API; cached rejects blijven actief voor nog ongeveer %s seconden", err.seconds)
+            _LOGGER.warning(
+                "Rejects tijdelijk geremd door API; cached rejects blijven actief voor nog ongeveer %s seconden",
+                err.seconds,
+            )
             return self._rejects_cache
 
     async def _async_update_data(self) -> dict[str, Any]:
         now = datetime.utcnow()
+
         if self._stats_throttle_until and now < self._stats_throttle_until:
             wait = int((self._stats_throttle_until - now).total_seconds())
             self._last_error = f"HTTP 429: Request was throttled. Expected available in {wait} seconds."
             raise UpdateFailed(self._last_error)
 
+        machine_ids = self.rvm_ids()
+        if not machine_ids:
+            return {
+                "stats": {},
+                "rejects": {},
+                "accepted": {},
+                "totals": {},
+                "machine_meta": self._machine_meta_cache,
+            }
+
         try:
-            stats = await self.client.rvm_stats(self.rvm_ids(), date.today())
+            stats = await self.client.rvm_stats(machine_ids, date.today())
             self._stats_throttle_until = None
             rejects_rows = await self._get_rejects_rows()
         except EnvipcoThrottleError as err:
@@ -379,6 +472,13 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception as err:
             self._last_error = f"Unexpected error: {err}"
             raise UpdateFailed(self._last_error) from err
+
+        selected_ids = set(machine_ids)
+        filtered_stats = {
+            machine_id: (row or {})
+            for machine_id, row in (stats or {}).items()
+            if machine_id in selected_ids
+        }
 
         rejects_by_machine: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
         accepted_by_machine: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
@@ -398,7 +498,8 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
                 or ""
             ).strip()
-            if not machine_id:
+
+            if not machine_id or machine_id not in selected_ids:
                 continue
 
             for key in REJECT_KEYS:
@@ -408,6 +509,7 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 key_text = str(key or "").strip()
                 if not key_text.lower().startswith(ACCEPT_FIELDS_PREFIX.lower()):
                     continue
+
                 lowered = key_text.lower()
                 if "can" in lowered or "alu" in lowered or "steel" in lowered:
                     accepted_by_machine[machine_id][KEY_ACCEPTED_CANS] += self.safe_int(value)
@@ -417,15 +519,17 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     accepted_by_machine[machine_id][KEY_ACCEPTED_GLASS] += self.safe_int(value)
 
         totals: dict[str, dict[str, Any]] = {}
-        for rvm_id in self.rvm_ids():
-            accepted_cans = self.accepted_cans(rvm_id) if stats == (self.data or {}).get("stats") else self.safe_int((stats.get(rvm_id, {}) or {}).get(KEY_ACCEPTED_CANS))
-            accepted_pet = self.accepted_pet(rvm_id) if stats == (self.data or {}).get("stats") else self.safe_int((stats.get(rvm_id, {}) or {}).get(KEY_ACCEPTED_PET))
-            accepted_glass = self.accepted_glass(rvm_id) if stats == (self.data or {}).get("stats") else self.safe_int((stats.get(rvm_id, {}) or {}).get(KEY_ACCEPTED_GLASS))
+        for rvm_id in machine_ids:
+            stat_row = filtered_stats.get(rvm_id, {}) or {}
+            accepted_cans = self.safe_int(stat_row.get(KEY_ACCEPTED_CANS))
+            accepted_pet = self.safe_int(stat_row.get(KEY_ACCEPTED_PET))
+            accepted_glass = self.safe_int(stat_row.get(KEY_ACCEPTED_GLASS))
             accepted_total = accepted_cans + accepted_pet + accepted_glass
             rejects_total = sum(rejects_by_machine[rvm_id].get(key, 0) for key in REJECT_KEYS)
             denominator = accepted_total + rejects_total
             reject_rate = round((rejects_total / denominator) * 100, 1) if denominator else 0.0
             rate_can, rate_pet = self.machine_rates(rvm_id)
+
             totals[rvm_id] = {
                 "accepted_cans": accepted_cans,
                 "accepted_pet": accepted_pet,
@@ -442,9 +546,9 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_error = None
 
         return {
-            "stats": stats,
-            "rejects": {k: dict(v) for k, v in rejects_by_machine.items()},
-            "accepted": {k: dict(v) for k, v in accepted_by_machine.items()},
+            "stats": filtered_stats,
+            "rejects": {machine_id: dict(values) for machine_id, values in rejects_by_machine.items()},
+            "accepted": {machine_id: dict(values) for machine_id, values in accepted_by_machine.items()},
             "totals": totals,
             "machine_meta": self._machine_meta_cache,
         }

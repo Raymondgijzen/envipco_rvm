@@ -1,255 +1,102 @@
+# /config/custom_components/envipco_rvm/sensor.py
+
+"""Sensor platform for Envipco RVM."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
+from homeassistant.util import slugify
 
-from .const import DOMAIN
+from .const import (
+    CONF_MACHINES,
+    DOMAIN,
+    KEY_ACCEPTED_CANS,
+    KEY_ACCEPTED_PET,
+    MATERIAL_LABELS_NL,
+    REJECT_KEYS,
+    REJECT_LABELS_NL,
+    STATUS_LAST_REPORT_FALLBACK_KEYS,
+    STATUS_LAST_REPORT_PRIMARY_KEY,
+    STATUS_STATE_KEY,
+)
 from .coordinator import EnvipcoCoordinator
 
 
-BIN_MAX = 10
+@dataclass(slots=True)
+class SensorMachineDef:
+    """Configured machine definition."""
+    id: str
+    name: str
 
 
-def _clean_material(value: Any) -> str | None:
-    """Maak materiaalwaarde schoon."""
+def parse_timestamp(value: Any) -> datetime | None:
+    """Parse timestamp safely."""
     if value is None:
         return None
 
-    text = str(value).strip()
-    if not text:
-        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=dt_util.UTC)
+        return dt_util.as_utc(value)
 
-    lowered = text.lower()
-    if lowered in {"unknown", "none", "null", "-", "n/a"}:
-        return None
-
-    return text
-
-
-def _get_bin_material(machine_data: dict[str, Any], bin_number: int) -> str | None:
-    """Zoek materiaal voor een bin via meerdere mogelijke key-namen."""
-    possible_keys = [
-        f"BinInfoMaterialBin{bin_number}",
-        f"BinInfoMatriaalBin{bin_number}",   # voor het geval de bron of eerdere code typo bevat
-        f"BinMaterial{bin_number}",
-        f"MaterialBin{bin_number}",
-    ]
-
-    for key in possible_keys:
-        value = _clean_material(machine_data.get(key))
-        if value:
-            return value
-
-    return None
-
-
-def _get_bin_limit(machine_data: dict[str, Any], bin_number: int) -> int | None:
-    """Lees bin limiet veilig uit."""
-    possible_keys = [
-        f"BinInfoLimitBin{bin_number}",
-        f"BinLimit{bin_number}",
-    ]
-
-    for key in possible_keys:
-        value = machine_data.get(key)
-        if value is None:
-            continue
-
-        try:
-            limit = int(float(value))
-            if limit > 0:
-                return limit
-        except (TypeError, ValueError):
-            continue
-
-    return None
-
-
-def _get_bin_count(machine_data: dict[str, Any], bin_number: int) -> int:
-    """Lees bin count veilig uit."""
-    possible_keys = [
-        f"Bin{bin_number}Count",
-        f"BinCount{bin_number}",
-    ]
-
-    for key in possible_keys:
-        value = machine_data.get(key)
-        if value is None:
-            continue
-
-        try:
-            return int(float(value))
-        except (TypeError, ValueError):
-            continue
-
-    return 0
-
-
-def _material_to_name(material: str | None, fallback_bin_number: int) -> str:
-    """Zet materiaal om naar nette naam."""
-    if not material:
-        return f"Bin {fallback_bin_number}"
-
-    normalized = material.strip().lower()
-
-    mapping = {
-        "pet": "PET",
-        "can": "Blik",
-        "blik": "Blik",
-        "plastic": "Plastic",
-        "glas": "Glas",
-    }
-
-    return mapping.get(normalized, material.strip())
-
-
-def _is_active_bin(machine_data: dict[str, Any], bin_number: int) -> tuple[bool, str | None, int | None]:
-    """
-    Bepaal of bin actief is.
-
-    Regels:
-    - Als materiaal aanwezig is -> actief
-    - Anders als limiet > 0 -> actief
-    - Anders niet actief
-    """
-    material = _get_bin_material(machine_data, bin_number)
-    limit = _get_bin_limit(machine_data, bin_number)
-
-    if material:
-        return True, material, limit
-
-    if limit is not None and limit > 0:
-        return True, None, limit
-
-    return False, None, None
-
-
-@dataclass
-class BinDefinition:
-    """Beschrijving van een actieve bin."""
-    bin_number: int
-    material: str | None
-    limit: int | None
-
-
-class EnvipcoBaseBinSensor(CoordinatorEntity[EnvipcoCoordinator], SensorEntity):
-    """Basis bin sensor."""
-
-    _attr_has_entity_name = True
-
-    def __init__(
-        self,
-        coordinator: EnvipcoCoordinator,
-        entry_id: str,
-        machine_serial: str,
-        machine_name: str,
-        bin_definition: BinDefinition,
-    ) -> None:
-        super().__init__(coordinator)
-        self._entry_id = entry_id
-        self._machine_serial = machine_serial
-        self._machine_name = machine_name
-        self._bin_definition = bin_definition
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        return {
-            "identifiers": {(DOMAIN, self._machine_serial)},
-            "name": self._machine_name,
-            "manufacturer": "Envipco",
-            "model": "RVM",
-        }
-
-    @property
-    def available(self) -> bool:
-        return self.coordinator.last_update_success
-
-    def _machine_data(self) -> dict[str, Any]:
-        return self.coordinator.get_machine_data(self._machine_serial) or {}
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        return {
-            "machine_serial": self._machine_serial,
-            "machine_name": self._machine_name,
-            "bin_number": self._bin_definition.bin_number,
-            "materiaal": self._bin_definition.material,
-            "limiet": self._bin_definition.limit,
-        }
-
-
-class EnvipcoBinCountSensor(EnvipcoBaseBinSensor):
-    """Sensor voor aantal in bin."""
-
-    _attr_icon = "mdi:counter"
-
-    def __init__(
-        self,
-        coordinator: EnvipcoCoordinator,
-        entry_id: str,
-        machine_serial: str,
-        machine_name: str,
-        bin_definition: BinDefinition,
-    ) -> None:
-        super().__init__(coordinator, entry_id, machine_serial, machine_name, bin_definition)
-
-        material_name = _material_to_name(bin_definition.material, bin_definition.bin_number)
-
-        self._attr_unique_id = (
-            f"{entry_id}_{machine_serial}_bin_{bin_definition.bin_number}_count"
-        )
-        self._attr_name = f"{material_name} aantal"
-
-    @property
-    def native_value(self) -> int:
-        machine_data = self._machine_data()
-        return _get_bin_count(machine_data, self._bin_definition.bin_number)
-
-    @property
-    def state_class(self) -> str:
-        return SensorStateClass.MEASUREMENT
-
-
-class EnvipcoBinFillSensor(EnvipcoBaseBinSensor):
-    """Sensor voor bin vulling."""
-
-    _attr_native_unit_of_measurement = PERCENTAGE
-    _attr_icon = "mdi:percent"
-
-    def __init__(
-        self,
-        coordinator: EnvipcoCoordinator,
-        entry_id: str,
-        machine_serial: str,
-        machine_name: str,
-        bin_definition: BinDefinition,
-    ) -> None:
-        super().__init__(coordinator, entry_id, machine_serial, machine_name, bin_definition)
-
-        material_name = _material_to_name(bin_definition.material, bin_definition.bin_number)
-
-        self._attr_unique_id = (
-            f"{entry_id}_{machine_serial}_bin_{bin_definition.bin_number}_fill"
-        )
-        self._attr_name = f"{material_name} vulling"
-
-    @property
-    def native_value(self) -> float | None:
-        machine_data = self._machine_data()
-        count = _get_bin_count(machine_data, self._bin_definition.bin_number)
-        limit = _get_bin_limit(machine_data, self._bin_definition.bin_number)
-
-        if limit is None or limit <= 0:
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
             return None
 
-        return round((count / limit) * 100, 1)
+        parsed = dt_util.parse_datetime(text)
+        if parsed is None:
+            return None
+
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=dt_util.UTC)
+
+        return dt_util.as_utc(parsed)
+
+    return None
+
+
+def format_local(dt_value: datetime | None) -> str | None:
+    """Format datetime in local timezone."""
+    if dt_value is None:
+        return None
+    return dt_util.as_local(dt_value).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def get_last_report_raw(rvm: dict[str, Any]) -> Any:
+    """Return last report raw value from preferred/fallback fields."""
+    raw = rvm.get(STATUS_LAST_REPORT_PRIMARY_KEY)
+    if raw is None:
+        for key in STATUS_LAST_REPORT_FALLBACK_KEYS:
+            raw = rvm.get(key)
+            if raw is not None:
+                break
+    return raw
+
+
+def material_label(material: str | None) -> str | None:
+    """Return Dutch material label."""
+    if not material:
+        return None
+    return MATERIAL_LABELS_NL.get(material, material)
+
+
+def bin_label(material: str | None, bin_no: int) -> str:
+    """Return friendly bin label."""
+    label = material_label(material)
+    if label:
+        return label
+    return f"Bin {bin_no}"
 
 
 async def async_setup_entry(
@@ -257,48 +104,498 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Zet sensoren op voor een config entry."""
-    coordinator: EnvipcoCoordinator = hass.data[DOMAIN][entry.entry_id]
+    """Set up Envipco RVM sensors."""
+    coordinator: EnvipcoCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+
+    machines_cfg = entry.options.get(CONF_MACHINES, entry.data.get(CONF_MACHINES, [])) or []
+    machines: list[SensorMachineDef] = []
+
+    for item in machines_cfg:
+        if not isinstance(item, dict):
+            continue
+
+        machine_id = str(item.get("id") or "").strip()
+        if not machine_id:
+            continue
+
+        machines.append(
+            SensorMachineDef(
+                id=machine_id,
+                name=str(item.get("name") or machine_id),
+            )
+        )
 
     entities: list[SensorEntity] = []
 
-    for machine in coordinator.get_all_machines():
-        machine_serial = machine.get("MachineSerialNumber")
-        machine_name = machine.get("MachineName") or machine_serial or "Envipco machine"
+    for machine in machines:
+        entities.extend(
+            [
+                StatusSensor(coordinator, machine),
+                LastReportSensor(coordinator, machine),
+                LastReportTextSensor(coordinator, machine),
+                LastSuccessfulUpdateSensor(coordinator, machine),
+                ApiThrottleStatusSensor(coordinator, machine),
+                ApiThrottleSecondsSensor(coordinator, machine),
+                AcceptedTotalSensor(coordinator, machine),
+                AcceptedCansSensor(coordinator, machine),
+                AcceptedPetSensor(coordinator, machine),
+                RejectTotalSensor(coordinator, machine),
+                RejectRateSensor(coordinator, machine),
+                RevenueTodaySensor(coordinator, machine),
+                RevenueCanTodaySensor(coordinator, machine),
+                RevenuePetTodaySensor(coordinator, machine),
+                LocationInfoSensor(coordinator, machine),
+            ]
+        )
 
-        if not machine_serial:
-            continue
+        for reject_key in REJECT_KEYS:
+            entities.append(RejectTypeSensor(coordinator, machine, reject_key))
 
-        for bin_number in range(1, BIN_MAX + 1):
-            active, material, limit = _is_active_bin(machine, bin_number)
-
-            if not active:
-                continue
-
-            bin_definition = BinDefinition(
-                bin_number=bin_number,
-                material=material,
-                limit=limit,
-            )
-
-            entities.append(
-                EnvipcoBinCountSensor(
-                    coordinator=coordinator,
-                    entry_id=entry.entry_id,
-                    machine_serial=machine_serial,
-                    machine_name=machine_name,
-                    bin_definition=bin_definition,
-                )
-            )
-
-            entities.append(
-                EnvipcoBinFillSensor(
-                    coordinator=coordinator,
-                    entry_id=entry.entry_id,
-                    machine_serial=machine_serial,
-                    machine_name=machine_name,
-                    bin_definition=bin_definition,
-                )
+        for bin_no in coordinator.active_bins(machine.id):
+            entities.extend(
+                [
+                    BinCountSensor(coordinator, machine, bin_no),
+                    BinLimitSensor(coordinator, machine, bin_no),
+                    BinPercentageSensor(coordinator, machine, bin_no),
+                ]
             )
 
     async_add_entities(entities)
+
+
+class BaseSensor(CoordinatorEntity[EnvipcoCoordinator], SensorEntity):
+    """Base sensor."""
+
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef) -> None:
+        """Init base sensor."""
+        super().__init__(coordinator)
+        self.machine = machine
+
+    @property
+    def device_info(self):
+        """Attach all entities to the machine device."""
+        return self.coordinator.machine_device_info(self.machine.id)
+
+    @property
+    def suggested_object_id(self) -> str | None:
+        """Stable suggested object id."""
+        unique_id = getattr(self, "_attr_unique_id", None)
+        if unique_id:
+            return slugify(str(unique_id), separator="_")
+        return slugify(f"{self.machine.id}_{self.__class__.__name__.lower()}", separator="_")
+
+    def _rvm(self) -> dict[str, Any]:
+        """Return raw machine row."""
+        return self.coordinator.rvm_data(self.machine.id)
+
+
+class StatusSensor(BaseSensor):
+    """Machine status."""
+
+    _attr_name = "Status"
+    _attr_icon = "mdi:robot"
+
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef) -> None:
+        super().__init__(coordinator, machine)
+        self._attr_unique_id = f"{machine.id}_status"
+
+    @property
+    def native_value(self):
+        return self._rvm().get(STATUS_STATE_KEY)
+
+
+class LastReportSensor(BaseSensor):
+    """Last report as timestamp."""
+
+    _attr_name = "Laatste rapport"
+    _attr_icon = "mdi:clock-outline"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef) -> None:
+        super().__init__(coordinator, machine)
+        self._attr_unique_id = f"{machine.id}_last_report"
+
+    @property
+    def native_value(self):
+        return parse_timestamp(get_last_report_raw(self._rvm()))
+
+
+class LastReportTextSensor(BaseSensor):
+    """Last report as local text."""
+
+    _attr_name = "Laatste rapport tekst"
+    _attr_icon = "mdi:calendar-clock"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef) -> None:
+        super().__init__(coordinator, machine)
+        self._attr_unique_id = f"{machine.id}_last_report_text"
+
+    @property
+    def native_value(self):
+        return format_local(parse_timestamp(get_last_report_raw(self._rvm())))
+
+
+class LastSuccessfulUpdateSensor(BaseSensor):
+    """Coordinator last successful update."""
+
+    _attr_name = "Laatste succesvolle update"
+    _attr_icon = "mdi:update"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef) -> None:
+        super().__init__(coordinator, machine)
+        self._attr_unique_id = f"{machine.id}_last_successful_update"
+
+    @property
+    def native_value(self):
+        return parse_timestamp(self.coordinator.last_successful_update)
+
+
+class ApiThrottleStatusSensor(BaseSensor):
+    """Readable API throttle status."""
+
+    _attr_name = "API throttling"
+    _attr_icon = "mdi:speedometer-slow"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef) -> None:
+        super().__init__(coordinator, machine)
+        self._attr_unique_id = f"{machine.id}_api_throttle_status"
+
+    @property
+    def native_value(self):
+        return self.coordinator.throttle_status_text
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "rvmstats_geremd": self.coordinator.stats_throttled,
+            "rvmstats_resterend_seconden": self.coordinator.stats_throttle_remaining,
+            "rejects_geremd": self.coordinator.rejects_throttled,
+            "rejects_resterend_seconden": self.coordinator.rejects_throttle_remaining,
+            "laatste_fout": self.coordinator.last_error,
+        }
+
+
+class ApiThrottleSecondsSensor(BaseSensor):
+    """Remaining API throttle time."""
+
+    _attr_name = "API throttle resterend"
+    _attr_icon = "mdi:timer-sand"
+    _attr_native_unit_of_measurement = "s"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef) -> None:
+        super().__init__(coordinator, machine)
+        self._attr_unique_id = f"{machine.id}_api_throttle_remaining"
+
+    @property
+    def native_value(self):
+        return max(
+            self.coordinator.stats_throttle_remaining,
+            self.coordinator.rejects_throttle_remaining,
+        )
+
+
+class AcceptedTotalSensor(BaseSensor):
+    """Total accepted items."""
+
+    _attr_name = "Totaal ingenomen"
+    _attr_icon = "mdi:counter"
+    _attr_state_class = SensorStateClass.TOTAL
+
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef) -> None:
+        super().__init__(coordinator, machine)
+        self._attr_unique_id = f"{machine.id}_accepted_total"
+
+    @property
+    def native_value(self):
+        return self.coordinator.machine_total_value(self.machine.id, "accepted_total")
+
+
+class AcceptedCansSensor(BaseSensor):
+    """Accepted cans."""
+
+    _attr_name = "Blik totaal"
+    _attr_icon = "mdi:beer"
+    _attr_state_class = SensorStateClass.TOTAL
+
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef) -> None:
+        super().__init__(coordinator, machine)
+        self._attr_unique_id = f"{machine.id}_accepted_cans"
+
+    @property
+    def native_value(self):
+        return self.coordinator.machine_total_value(self.machine.id, KEY_ACCEPTED_CANS)
+
+
+class AcceptedPetSensor(BaseSensor):
+    """Accepted PET."""
+
+    _attr_name = "PET totaal"
+    _attr_icon = "mdi:bottle-soda"
+    _attr_state_class = SensorStateClass.TOTAL
+
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef) -> None:
+        super().__init__(coordinator, machine)
+        self._attr_unique_id = f"{machine.id}_accepted_pet"
+
+    @property
+    def native_value(self):
+        return self.coordinator.machine_total_value(self.machine.id, KEY_ACCEPTED_PET)
+
+
+class RejectTotalSensor(BaseSensor):
+    """Total rejects."""
+
+    _attr_name = "Afkeur totaal"
+    _attr_icon = "mdi:close-circle-outline"
+    _attr_state_class = SensorStateClass.TOTAL
+
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef) -> None:
+        super().__init__(coordinator, machine)
+        self._attr_unique_id = f"{machine.id}_reject_total"
+
+    @property
+    def native_value(self):
+        return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get("rejects_total", 0)
+
+
+class RejectRateSensor(BaseSensor):
+    """Reject percentage."""
+
+    _attr_name = "Afkeurpercentage"
+    _attr_icon = "mdi:percent"
+    _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef) -> None:
+        super().__init__(coordinator, machine)
+        self._attr_unique_id = f"{machine.id}_reject_rate"
+
+    @property
+    def native_value(self):
+        return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get("reject_rate", 0.0)
+
+
+class RevenueTodaySensor(BaseSensor):
+    """Total revenue today."""
+
+    _attr_name = "Opbrengst totaal"
+    _attr_icon = "mdi:currency-eur"
+    _attr_native_unit_of_measurement = "EUR"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_state_class = SensorStateClass.TOTAL
+
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef) -> None:
+        super().__init__(coordinator, machine)
+        self._attr_unique_id = f"{machine.id}_revenue_today"
+
+    @property
+    def native_value(self):
+        rate_can, rate_pet = self.coordinator.machine_rates(self.machine.id)
+        return round(
+            (self.coordinator.machine_total_value(self.machine.id, KEY_ACCEPTED_CANS) * rate_can)
+            + (self.coordinator.machine_total_value(self.machine.id, KEY_ACCEPTED_PET) * rate_pet),
+            4,
+        )
+
+
+class RevenueCanTodaySensor(BaseSensor):
+    """Can revenue today."""
+
+    _attr_name = "Opbrengst blik"
+    _attr_icon = "mdi:currency-eur"
+    _attr_native_unit_of_measurement = "EUR"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_state_class = SensorStateClass.TOTAL
+
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef) -> None:
+        super().__init__(coordinator, machine)
+        self._attr_unique_id = f"{machine.id}_revenue_can_today"
+
+    @property
+    def native_value(self):
+        rate_can, _ = self.coordinator.machine_rates(self.machine.id)
+        return round(
+            self.coordinator.machine_total_value(self.machine.id, KEY_ACCEPTED_CANS) * rate_can,
+            4,
+        )
+
+
+class RevenuePetTodaySensor(BaseSensor):
+    """PET revenue today."""
+
+    _attr_name = "Opbrengst PET"
+    _attr_icon = "mdi:currency-eur"
+    _attr_native_unit_of_measurement = "EUR"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_state_class = SensorStateClass.TOTAL
+
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef) -> None:
+        super().__init__(coordinator, machine)
+        self._attr_unique_id = f"{machine.id}_revenue_pet_today"
+
+    @property
+    def native_value(self):
+        _, rate_pet = self.coordinator.machine_rates(self.machine.id)
+        return round(
+            self.coordinator.machine_total_value(self.machine.id, KEY_ACCEPTED_PET) * rate_pet,
+            4,
+        )
+
+
+class LocationInfoSensor(BaseSensor):
+    """Location info sensor."""
+
+    _attr_icon = "mdi:map-marker"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef) -> None:
+        super().__init__(coordinator, machine)
+        self._attr_unique_id = f"{machine.id}_location_info"
+        self._attr_name = "Locatie"
+
+    @property
+    def native_value(self):
+        address = self.coordinator.machine_address(self.machine.id) or ""
+        postal = self.coordinator.machine_postal_code(self.machine.id) or ""
+        city = self.coordinator.machine_city(self.machine.id) or ""
+        city_line = " ".join(part for part in [postal, city] if part).strip()
+        return ", ".join(part for part in [address, city_line] if part) or None
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "machine_naam": self.coordinator.machine_device_name(self.machine.id),
+            "machine_id": self.machine.id,
+            "machine_type": self.coordinator.machine_type(self.machine.id),
+            "adres": self.coordinator.machine_address(self.machine.id),
+            "postcode": self.coordinator.machine_postal_code(self.machine.id),
+            "plaats": self.coordinator.machine_city(self.machine.id),
+            "land": self.coordinator.machine_country(self.machine.id),
+            "add_date": self.coordinator.machine_add_date(self.machine.id),
+            "site_id": self.coordinator.machine_site_id(self.machine.id),
+            "account_name": self.coordinator.machine_site_name(self.machine.id),
+        }
+
+
+class RejectTypeSensor(BaseSensor):
+    """Reject type sensor."""
+
+    _attr_icon = "mdi:alert-circle-outline"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef, reject_key: str) -> None:
+        super().__init__(coordinator, machine)
+        self.reject_key = reject_key
+        self._attr_unique_id = f"{machine.id}_reject_{reject_key}"
+        self._attr_name = REJECT_LABELS_NL.get(reject_key, f"Reject {reject_key}")
+
+    @property
+    def native_value(self):
+        return (self.coordinator.data.get("rejects", {}) or {}).get(self.machine.id, {}).get(self.reject_key, 0)
+
+
+class BinBaseSensor(BaseSensor):
+    """Base class for bin-related sensors."""
+
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef, bin_no: int) -> None:
+        super().__init__(coordinator, machine)
+        self.bin_no = bin_no
+
+    def _material(self) -> str | None:
+        return self.coordinator.bin_material(self.machine.id, self.bin_no)
+
+    def _material_label(self) -> str:
+        return bin_label(self._material(), self.bin_no)
+
+    def _count(self) -> int:
+        return self.coordinator.bin_count(self.machine.id, self.bin_no)
+
+    def _full_percent(self) -> float | None:
+        return self.coordinator.bin_full_percent(self.machine.id, self.bin_no)
+
+    def _limit(self) -> int | None:
+        return self.coordinator.current_bin_limit(self.machine.id, self.bin_no)
+
+
+class BinCountSensor(BinBaseSensor):
+    """Bin count sensor."""
+
+    _attr_icon = "mdi:counter"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef, bin_no: int) -> None:
+        super().__init__(coordinator, machine, bin_no)
+        self._attr_unique_id = f"{machine.id}_bin_{bin_no}_count"
+        self._attr_name = f"{self._material_label()} aantal"
+
+    @property
+    def native_value(self):
+        return self._count()
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "bin_nummer": self.bin_no,
+            "materiaal": material_label(self._material()),
+            "api_vulling_percentage": self._full_percent(),
+            "actieve_limiet": self._limit(),
+        }
+
+
+class BinLimitSensor(BinBaseSensor):
+    """Active bin limit sensor."""
+
+    _attr_icon = "mdi:tune-vertical"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef, bin_no: int) -> None:
+        super().__init__(coordinator, machine, bin_no)
+        self._attr_unique_id = f"{machine.id}_bin_{bin_no}_active_limit"
+        self._attr_name = f"{self._material_label()} actieve limiet"
+
+    @property
+    def native_value(self):
+        return self._limit()
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "bin_nummer": self.bin_no,
+            "materiaal": material_label(self._material()),
+            "ingestelde_limiet": self.coordinator.configured_bin_limit(self.machine.id, self.bin_no),
+        }
+
+
+class BinPercentageSensor(BinBaseSensor):
+    """Bin fill percentage sensor."""
+
+    _attr_icon = "mdi:percent"
+    _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef, bin_no: int) -> None:
+        super().__init__(coordinator, machine, bin_no)
+        self._attr_unique_id = f"{machine.id}_bin_{bin_no}_percentage"
+        self._attr_name = f"{self._material_label()} vulling"
+
+    @property
+    def native_value(self):
+        return self._full_percent()
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "bin_nummer": self.bin_no,
+            "materiaal": material_label(self._material()),
+            "aantal": self._count(),
+            "actieve_limiet": self._limit(),
+            "bron": "BinInfoFullBinX",
+        }

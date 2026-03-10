@@ -1,91 +1,114 @@
+# /config/custom_components/envipco_rvm/const.py
+
+"""Constants for the Envipco RVM integration."""
+
 from __future__ import annotations
 
 DOMAIN = "envipco_rvm"
 NAME = "Envipco RVM"
-VERSION = "1.0.18"
 
+#
+# Config keys
+#
 CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
-CONF_RVMSTATS_INTERVAL = "rvmstats_interval"
-CONF_REJECTS_INTERVAL = "rejects_interval"
 CONF_MACHINES = "machines"
 CONF_MACHINE_RATES = "machine_rates"
 CONF_MACHINE_BIN_LIMITS = "machine_bin_limits"
 CONF_MACHINE_META = "machine_meta"
+CONF_RVMSTATS_INTERVAL = "rvmstats_interval"
+CONF_REJECTS_INTERVAL = "rejects_interval"
 
+#
+# Defaults
+#
 DEFAULT_RVMSTATS_INTERVAL = 300
-DEFAULT_REJECTS_INTERVAL = 900
-DEFAULT_RATE_CAN = 0.0107
-DEFAULT_RATE_PET = 0.0331
+DEFAULT_REJECTS_INTERVAL = 1800
 
-EP_BASE = "https://ePortal.envipco.com/api"
-PLATFORMS = ["sensor", "number"]
+DEFAULT_RATE_CAN = 0.15
+DEFAULT_RATE_PET = 0.15
 
-STATUS_STATE_KEY = "StatusInfoState"
-STATUS_LAST_REPORT_PRIMARY_KEY = "RVMStatusLastTime"
-STATUS_LAST_REPORT_FALLBACK_KEYS: list[str] = ["StatusInfoLastReport"]
-
+#
+# API field prefixes
+#
 BIN_MATERIAL_PREFIX = "BinInfoMaterialBin"
+BIN_LIMIT_PREFIX = "BinInfoLimitBin"
 BIN_FULL_PREFIX = "BinInfoFullBin"
 BIN_COUNT_PREFIX = "BinInfoCountBin"
-BIN_LIMIT_PREFIX = "BinInfoLimitBin"
+ACCEPT_FIELDS_PREFIX = "accepted"
 
+#
+# Main status fields
+#
+STATUS_STATE_KEY = "StatusInfoState"
+STATUS_LAST_REPORT_PRIMARY_KEY = "StatusInfoLastReport"
+STATUS_LAST_REPORT_FALLBACK_KEYS = (
+    "RVMStatusReportDate",
+    "RVMStatusLastTime",
+    "RVMStatusStateDateGMT",
+)
+
+#
+# Accepted counters from rvmStats
+#
 KEY_ACCEPTED_CANS = "cans_accepted"
 KEY_ACCEPTED_PET = "pet_accepted"
 KEY_ACCEPTED_GLASS = "glass_accepted"
 
+#
+# Reject fields
+# Houd deze lijst gelijk aan wat jouw rejects-endpoint echt teruggeeft.
+#
 REJECT_KEYS = [
+    "binFull",
     "noBarcode",
     "notInDb",
-    "bcMove",
     "sortingErr",
-    "notAccepted",
     "shape",
     "weight",
-    "collision",
-    "binFull",
-    "notPermitted",
     "wrongMaterial",
-    "mode",
 ]
 
-REJECT_LABELS_NL: dict[str, str] = {
-    "noBarcode": "Afkeur geen barcode",
-    "notInDb": "Afkeur niet in database",
-    "bcMove": "Afkeur barcode verplaatst",
-    "sortingErr": "Afkeur sorteerfout",
-    "notAccepted": "Afkeur niet geaccepteerd",
-    "shape": "Afkeur vorm",
-    "weight": "Afkeur gewicht",
-    "collision": "Afkeur botsing",
-    "binFull": "Afkeur bak vol",
-    "notPermitted": "Afkeur niet toegestaan",
-    "wrongMaterial": "Afkeur fout materiaal",
-    "mode": "Afkeur modus",
+REJECT_LABELS_NL = {
+    "binFull": "Bak vol",
+    "noBarcode": "Geen barcode",
+    "notInDb": "Niet in database",
+    "sortingErr": "Sorteerfout",
+    "shape": "Vorm",
+    "weight": "Gewicht",
+    "wrongMaterial": "Verkeerd materiaal",
 }
 
-ACCEPT_FIELDS_PREFIX = "Accept"
-
-MATERIAL_MAP: dict[str, str] = {
+#
+# Materiaalmapping
+# API gebruikt o.a. ALU / PET / GLASS
+#
+MATERIAL_MAP = {
     "ALU": "CAN",
-    "ALU STEEL": "CAN",
-    "ALUSTEEL": "CAN",
-    "STEEL": "CAN",
     "CAN": "CAN",
-    "CANS": "CAN",
+    "METAL": "CAN",
+    "STEEL": "CAN",
     "PET": "PET",
+    "PLASTIC": "PLASTIC",
     "GLASS": "GLASS",
     "GLS": "GLASS",
 }
 
-MATERIAL_LABELS_NL: dict[str, str] = {
+MATERIAL_LABELS_NL = {
     "CAN": "Blik",
     "PET": "PET",
+    "PLASTIC": "Plastic",
     "GLASS": "Glas",
 }
 
-DEFAULT_BIN_CAPACITY_BY_MATERIAL: dict[str, int] = {
-    "CAN": 1200,
-    "PET": 600,
-    "GLASS": 400,
+#
+# Fallback capaciteiten per materiaal
+# Alleen gebruikt als de API geen limiet geeft en jij niets handmatig hebt ingesteld.
+# Pas deze gerust aan naar wat voor jouw machines logisch is.
+#
+DEFAULT_BIN_CAPACITY_BY_MATERIAL = {
+    "CAN": 1000,
+    "PET": 1000,
+    "PLASTIC": 1000,
+    "GLASS": 1000,
 }

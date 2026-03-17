@@ -1,14 +1,8 @@
-"""Sensor platform for Envipco RVM.
-
-This file intentionally keeps entity classes thin. Complex API logic and
-derived calculations live in the coordinator, so sensors stay predictable
-and easier to debug.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import re
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -17,7 +11,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -98,12 +92,14 @@ def material_label(material: str | None) -> str | None:
     return MATERIAL_LABELS_NL.get(material, material)
 
 
-def _bin_entity_unique_ids(machine_id: str, bin_no: int) -> list[str]:
-    return [
-        f"{machine_id}_bin_{bin_no}_count",
-        f"{machine_id}_bin_{bin_no}_active_limit",
-        f"{machine_id}_bin_{bin_no}_percentage",
-    ]
+def _extract_bin_number(text: str) -> int | None:
+    match = re.search(r"_bin_(\d+)_", text)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
 
 
 async def _async_remove_inactive_bin_entities(
@@ -112,26 +108,37 @@ async def _async_remove_inactive_bin_entities(
     coordinator: EnvipcoCoordinator,
     machines: list[SensorMachineDef],
 ) -> None:
-    """Remove old bin entities from registry when bins are no longer active."""
     entity_registry = er.async_get(hass)
 
-    active_unique_ids: set[str] = set()
+    active_by_machine: dict[str, set[int]] = {}
     for machine in machines:
-        for bin_no in coordinator.active_bins(machine.id):
-            active_unique_ids.update(_bin_entity_unique_ids(machine.id, bin_no))
+        active_by_machine[machine.id] = set(coordinator.active_bins(machine.id))
 
     for entity_entry in list(entity_registry.entities.values()):
         if entity_entry.config_entry_id != entry.entry_id:
             continue
 
         unique_id = (entity_entry.unique_id or "").strip()
-        if not unique_id:
+        entity_id = (entity_entry.entity_id or "").strip()
+
+        target_text = unique_id or entity_id
+        if "_bin_" not in target_text:
             continue
 
-        if "_bin_" not in unique_id:
+        machine_id = None
+        for machine in machines:
+            if target_text.startswith(f"{machine.id}_bin_"):
+                machine_id = machine.id
+                break
+
+        if machine_id is None:
             continue
 
-        if unique_id in active_unique_ids:
+        bin_no = _extract_bin_number(target_text)
+        if bin_no is None:
+            continue
+
+        if bin_no in active_by_machine.get(machine_id, set()):
             continue
 
         entity_registry.async_remove(entity_entry.entity_id)
@@ -169,33 +176,33 @@ async def async_setup_entry(
     for machine in machines:
         entities.extend(
             [
-                StatusSensor(hass, entry, coordinator, machine),
-                LastReportSensor(hass, entry, coordinator, machine),
-                LastReportTextSensor(hass, entry, coordinator, machine),
-                LastSuccessfulUpdateSensor(hass, entry, coordinator, machine),
-                ApiThrottleStatusSensor(hass, entry, coordinator, machine),
-                ApiThrottleSecondsSensor(hass, entry, coordinator, machine),
-                AcceptedTotalSensor(hass, entry, coordinator, machine),
-                AcceptedCansSensor(hass, entry, coordinator, machine),
-                AcceptedPetSensor(hass, entry, coordinator, machine),
-                RejectTotalSensor(hass, entry, coordinator, machine),
-                RejectRateSensor(hass, entry, coordinator, machine),
-                RevenueTodaySensor(hass, entry, coordinator, machine),
-                RevenueCanTodaySensor(hass, entry, coordinator, machine),
-                RevenuePetTodaySensor(hass, entry, coordinator, machine),
-                LocationInfoSensor(hass, entry, coordinator, machine),
+                StatusSensor(coordinator, machine),
+                LastReportSensor(coordinator, machine),
+                LastReportTextSensor(coordinator, machine),
+                LastSuccessfulUpdateSensor(coordinator, machine),
+                ApiThrottleStatusSensor(coordinator, machine),
+                ApiThrottleSecondsSensor(coordinator, machine),
+                AcceptedTotalSensor(coordinator, machine),
+                AcceptedCansSensor(coordinator, machine),
+                AcceptedPetSensor(coordinator, machine),
+                RejectTotalSensor(coordinator, machine),
+                RejectRateSensor(coordinator, machine),
+                RevenueTodaySensor(coordinator, machine),
+                RevenueCanTodaySensor(coordinator, machine),
+                RevenuePetTodaySensor(coordinator, machine),
+                LocationInfoSensor(coordinator, machine),
             ]
         )
 
         for reject_key in REJECT_KEYS:
-            entities.append(RejectTypeSensor(hass, entry, coordinator, machine, reject_key))
+            entities.append(RejectTypeSensor(coordinator, machine, reject_key))
 
         for bin_no in coordinator.active_bins(machine.id):
             entities.extend(
                 [
-                    BinCountSensor(hass, entry, coordinator, machine, bin_no),
-                    BinLimitSensor(hass, entry, coordinator, machine, bin_no),
-                    BinPercentageSensor(hass, entry, coordinator, machine, bin_no),
+                    BinCountSensor(coordinator, machine, bin_no),
+                    BinLimitSensor(coordinator, machine, bin_no),
+                    BinPercentageSensor(coordinator, machine, bin_no),
                 ]
             )
 
@@ -205,20 +212,9 @@ async def async_setup_entry(
 class BaseSensor(CoordinatorEntity[EnvipcoCoordinator], SensorEntity):
     _attr_has_entity_name = True
 
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        entry: ConfigEntry,
-        coordinator: EnvipcoCoordinator,
-        machine: SensorMachineDef,
-    ) -> None:
+    def __init__(self, coordinator: EnvipcoCoordinator, machine: SensorMachineDef) -> None:
         super().__init__(coordinator)
-        self.hass = hass
-        self.entry = entry
         self.machine = machine
-
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
 
     @property
     def device_info(self):
@@ -239,8 +235,8 @@ class StatusSensor(BaseSensor):
     _attr_name = "Status"
     _attr_icon = "mdi:robot"
 
-    def __init__(self, hass, entry, coordinator, machine):
-        super().__init__(hass, entry, coordinator, machine)
+    def __init__(self, coordinator, machine):
+        super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_status"
 
     @property
@@ -254,8 +250,8 @@ class LastReportSensor(BaseSensor):
     _attr_device_class = SensorDeviceClass.TIMESTAMP
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, hass, entry, coordinator, machine):
-        super().__init__(hass, entry, coordinator, machine)
+    def __init__(self, coordinator, machine):
+        super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_last_report"
 
     @property
@@ -268,8 +264,8 @@ class LastReportTextSensor(BaseSensor):
     _attr_icon = "mdi:calendar-clock"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, hass, entry, coordinator, machine):
-        super().__init__(hass, entry, coordinator, machine)
+    def __init__(self, coordinator, machine):
+        super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_last_report_text"
 
     @property
@@ -283,8 +279,8 @@ class LastSuccessfulUpdateSensor(BaseSensor):
     _attr_device_class = SensorDeviceClass.TIMESTAMP
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, hass, entry, coordinator, machine):
-        super().__init__(hass, entry, coordinator, machine)
+    def __init__(self, coordinator, machine):
+        super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_last_successful_update"
 
     @property
@@ -297,8 +293,8 @@ class ApiThrottleStatusSensor(BaseSensor):
     _attr_icon = "mdi:speedometer-slow"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, hass, entry, coordinator, machine):
-        super().__init__(hass, entry, coordinator, machine)
+    def __init__(self, coordinator, machine):
+        super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_api_throttle_status"
 
     @property
@@ -322,8 +318,8 @@ class ApiThrottleSecondsSensor(BaseSensor):
     _attr_native_unit_of_measurement = "s"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, hass, entry, coordinator, machine):
-        super().__init__(hass, entry, coordinator, machine)
+    def __init__(self, coordinator, machine):
+        super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_api_throttle_remaining"
 
     @property
@@ -339,8 +335,8 @@ class AcceptedTotalSensor(BaseSensor):
     _attr_icon = "mdi:counter"
     _attr_state_class = SensorStateClass.TOTAL
 
-    def __init__(self, hass, entry, coordinator, machine):
-        super().__init__(hass, entry, coordinator, machine)
+    def __init__(self, coordinator, machine):
+        super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_accepted_total"
 
     @property
@@ -353,8 +349,8 @@ class AcceptedCansSensor(BaseSensor):
     _attr_icon = "mdi:beer"
     _attr_state_class = SensorStateClass.TOTAL
 
-    def __init__(self, hass, entry, coordinator, machine):
-        super().__init__(hass, entry, coordinator, machine)
+    def __init__(self, coordinator, machine):
+        super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_accepted_cans"
 
     @property
@@ -367,8 +363,8 @@ class AcceptedPetSensor(BaseSensor):
     _attr_icon = "mdi:bottle-soda"
     _attr_state_class = SensorStateClass.TOTAL
 
-    def __init__(self, hass, entry, coordinator, machine):
-        super().__init__(hass, entry, coordinator, machine)
+    def __init__(self, coordinator, machine):
+        super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_accepted_pet"
 
     @property
@@ -381,13 +377,15 @@ class RejectTotalSensor(BaseSensor):
     _attr_icon = "mdi:close-circle-outline"
     _attr_state_class = SensorStateClass.TOTAL
 
-    def __init__(self, hass, entry, coordinator, machine):
-        super().__init__(hass, entry, coordinator, machine)
+    def __init__(self, coordinator, machine):
+        super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_reject_total"
 
     @property
     def native_value(self):
-        return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get("rejects_total", 0)
+        return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get(
+            "rejects_total", 0
+        )
 
 
 class RejectRateSensor(BaseSensor):
@@ -396,13 +394,15 @@ class RejectRateSensor(BaseSensor):
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
 
-    def __init__(self, hass, entry, coordinator, machine):
-        super().__init__(hass, entry, coordinator, machine)
+    def __init__(self, coordinator, machine):
+        super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_reject_rate"
 
     @property
     def native_value(self):
-        return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get("reject_rate", 0.0)
+        return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get(
+            "reject_rate", 0.0
+        )
 
 
 class RevenueTodaySensor(BaseSensor):
@@ -412,8 +412,8 @@ class RevenueTodaySensor(BaseSensor):
     _attr_device_class = SensorDeviceClass.MONETARY
     _attr_state_class = SensorStateClass.TOTAL
 
-    def __init__(self, hass, entry, coordinator, machine):
-        super().__init__(hass, entry, coordinator, machine)
+    def __init__(self, coordinator, machine):
+        super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_revenue_today"
 
     @property
@@ -433,14 +433,17 @@ class RevenueCanTodaySensor(BaseSensor):
     _attr_device_class = SensorDeviceClass.MONETARY
     _attr_state_class = SensorStateClass.TOTAL
 
-    def __init__(self, hass, entry, coordinator, machine):
-        super().__init__(hass, entry, coordinator, machine)
+    def __init__(self, coordinator, machine):
+        super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_revenue_can_today"
 
     @property
     def native_value(self):
         rate_can, _ = self.coordinator.machine_rates(self.machine.id)
-        return round(self.coordinator.machine_total_value(self.machine.id, KEY_ACCEPTED_CANS) * rate_can, 4)
+        return round(
+            self.coordinator.machine_total_value(self.machine.id, KEY_ACCEPTED_CANS) * rate_can,
+            4,
+        )
 
 
 class RevenuePetTodaySensor(BaseSensor):
@@ -450,22 +453,25 @@ class RevenuePetTodaySensor(BaseSensor):
     _attr_device_class = SensorDeviceClass.MONETARY
     _attr_state_class = SensorStateClass.TOTAL
 
-    def __init__(self, hass, entry, coordinator, machine):
-        super().__init__(hass, entry, coordinator, machine)
+    def __init__(self, coordinator, machine):
+        super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_revenue_pet_today"
 
     @property
     def native_value(self):
         _, rate_pet = self.coordinator.machine_rates(self.machine.id)
-        return round(self.coordinator.machine_total_value(self.machine.id, KEY_ACCEPTED_PET) * rate_pet, 4)
+        return round(
+            self.coordinator.machine_total_value(self.machine.id, KEY_ACCEPTED_PET) * rate_pet,
+            4,
+        )
 
 
 class LocationInfoSensor(BaseSensor):
     _attr_icon = "mdi:map-marker"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, hass, entry, coordinator, machine):
-        super().__init__(hass, entry, coordinator, machine)
+    def __init__(self, coordinator, machine):
+        super().__init__(coordinator, machine)
         self._attr_unique_id = f"{machine.id}_location_info"
         self._attr_name = "Locatie"
 
@@ -497,20 +503,22 @@ class RejectTypeSensor(BaseSensor):
     _attr_icon = "mdi:alert-circle-outline"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, hass, entry, coordinator, machine, reject_key: str):
-        super().__init__(hass, entry, coordinator, machine)
+    def __init__(self, coordinator, machine, reject_key: str):
+        super().__init__(coordinator, machine)
         self.reject_key = reject_key
         self._attr_unique_id = f"{machine.id}_reject_{reject_key}"
         self._attr_name = REJECT_LABELS_NL.get(reject_key, f"Reject {reject_key}")
 
     @property
     def native_value(self):
-        return (self.coordinator.data.get("rejects", {}) or {}).get(self.machine.id, {}).get(self.reject_key, 0)
+        return (self.coordinator.data.get("rejects", {}) or {}).get(self.machine.id, {}).get(
+            self.reject_key, 0
+        )
 
 
 class BinBaseSensor(BaseSensor):
-    def __init__(self, hass, entry, coordinator, machine, bin_no: int):
-        super().__init__(hass, entry, coordinator, machine)
+    def __init__(self, coordinator, machine, bin_no: int):
+        super().__init__(coordinator, machine)
         self.bin_no = bin_no
 
     @property
@@ -538,8 +546,8 @@ class BinCountSensor(BinBaseSensor):
     _attr_icon = "mdi:counter"
     _attr_state_class = SensorStateClass.MEASUREMENT
 
-    def __init__(self, hass, entry, coordinator, machine, bin_no: int):
-        super().__init__(hass, entry, coordinator, machine, bin_no)
+    def __init__(self, coordinator, machine, bin_no: int):
+        super().__init__(coordinator, machine, bin_no)
         self._attr_unique_id = f"{machine.id}_bin_{bin_no}_count"
         material = self._material_label()
         self._attr_name = f"Bin {bin_no} aantal ({material})" if material else f"Bin {bin_no} aantal"
@@ -561,8 +569,8 @@ class BinLimitSensor(BinBaseSensor):
     _attr_icon = "mdi:tune-vertical"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, hass, entry, coordinator, machine, bin_no: int):
-        super().__init__(hass, entry, coordinator, machine, bin_no)
+    def __init__(self, coordinator, machine, bin_no: int):
+        super().__init__(coordinator, machine, bin_no)
         self._attr_unique_id = f"{machine.id}_bin_{bin_no}_active_limit"
         self._attr_name = f"Bin {bin_no} actieve limiet"
 
@@ -574,8 +582,12 @@ class BinLimitSensor(BinBaseSensor):
     def extra_state_attributes(self):
         return {
             "materiaal": self._material_label(),
-            "api_limiet": self.coordinator.safe_int(self._rvm().get(f"BinInfoLimitBin{self.bin_no}")) or None,
-            "ingestelde_limiet": self.coordinator.configured_bin_limit(self.machine.id, self.bin_no),
+            "api_limiet": self.coordinator.safe_int(
+                self._rvm().get(f"BinInfoLimitBin{self.bin_no}")
+            ) or None,
+            "ingestelde_limiet": self.coordinator.configured_bin_limit(
+                self.machine.id, self.bin_no
+            ),
         }
 
 
@@ -584,8 +596,8 @@ class BinPercentageSensor(BinBaseSensor):
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
 
-    def __init__(self, hass, entry, coordinator, machine, bin_no: int):
-        super().__init__(hass, entry, coordinator, machine, bin_no)
+    def __init__(self, coordinator, machine, bin_no: int):
+        super().__init__(coordinator, machine, bin_no)
         self._attr_unique_id = f"{machine.id}_bin_{bin_no}_percentage"
         self._attr_name = f"Bin {bin_no} vulling"
 
@@ -604,5 +616,7 @@ class BinPercentageSensor(BinBaseSensor):
             "materiaal": self._material_label(),
             "aantal": self._count(),
             "actieve_limiet": self.coordinator.current_bin_limit(self.machine.id, self.bin_no),
-            "fallback_materiaal_limiet": DEFAULT_BIN_CAPACITY_BY_MATERIAL.get(material) if material else None,
+            "fallback_materiaal_limiet": (
+                DEFAULT_BIN_CAPACITY_BY_MATERIAL.get(material) if material else None
+            ),
         }

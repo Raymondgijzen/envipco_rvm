@@ -1,43 +1,76 @@
-# /config/custom_components/envipco_rvm/number.py
-
-"""Number platform for Envipco RVM."""
-
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import slugify
 
-from .const import CONF_MACHINES, DOMAIN, MATERIAL_LABELS_NL
+from .const import (
+    CONF_MACHINE_BIN_LIMITS,
+    CONF_MACHINES,
+    DEFAULT_BIN_CAPACITY_BY_MATERIAL,
+    DOMAIN,
+)
 from .coordinator import EnvipcoCoordinator
 
 
-@dataclass(slots=True)
-class NumberMachineDef:
-    """Configured machine definition."""
-    id: str
-    name: str
+def _machine_name_map(entry: ConfigEntry) -> dict[str, str]:
+    machines_cfg = entry.options.get(CONF_MACHINES, entry.data.get(CONF_MACHINES, [])) or []
+    result: dict[str, str] = {}
+
+    for item in machines_cfg:
+        if not isinstance(item, dict):
+            continue
+        machine_id = str(item.get("id") or "").strip()
+        if not machine_id:
+            continue
+        result[machine_id] = str(item.get("name") or machine_id)
+
+    return result
 
 
-def material_label(material: str | None) -> str | None:
-    """Return Dutch material label."""
-    if not material:
-        return None
-    return MATERIAL_LABELS_NL.get(material, material)
+def _number_unique_id(machine_id: str, bin_no: int) -> str:
+    return f"{machine_id}_bin_{bin_no}_limit"
 
 
-def bin_label(material: str | None, bin_no: int) -> str:
-    """Return friendly bin label."""
-    label = material_label(material)
-    if label:
-        return label
-    return f"Bin {bin_no}"
+async def _async_remove_inactive_bin_limit_numbers(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    coordinator: EnvipcoCoordinator,
+    machine_ids: list[str],
+) -> None:
+    """Remove old bin limit number entities for bins that are no longer active."""
+    entity_registry = er.async_get(hass)
+
+    active_unique_ids: set[str] = set()
+    for machine_id in machine_ids:
+        for bin_no in coordinator.active_bins(machine_id):
+            active_unique_ids.add(_number_unique_id(machine_id, bin_no))
+
+    for entity_entry in list(entity_registry.entities.values()):
+        if entity_entry.config_entry_id != entry.entry_id:
+            continue
+
+        unique_id = (entity_entry.unique_id or "").strip()
+        if not unique_id:
+            continue
+
+        if not unique_id.endswith("_limit"):
+            continue
+
+        if "_bin_" not in unique_id:
+            continue
+
+        if unique_id in active_unique_ids:
+            continue
+
+        entity_registry.async_remove(entity_entry.entity_id)
 
 
 async def async_setup_entry(
@@ -45,163 +78,140 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Envipco RVM number entities."""
-    coordinator: EnvipcoCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    data = hass.data[DOMAIN][entry.entry_id]
+    coordinator: EnvipcoCoordinator = data["coordinator"]
 
-    machines_cfg = entry.options.get(CONF_MACHINES, entry.data.get(CONF_MACHINES, [])) or []
-    machines: list[NumberMachineDef] = []
+    machine_name_map = _machine_name_map(entry)
+    machine_ids = list(machine_name_map.keys())
 
-    for item in machines_cfg:
-        if not isinstance(item, dict):
-            continue
-
-        machine_id = str(item.get("id") or "").strip()
-        if not machine_id:
-            continue
-
-        machines.append(
-            NumberMachineDef(
-                id=machine_id,
-                name=str(item.get("name") or machine_id),
-            )
-        )
+    await _async_remove_inactive_bin_limit_numbers(hass, entry, coordinator, machine_ids)
 
     entities: list[NumberEntity] = []
 
-    for machine in machines:
-        for bin_no in coordinator.active_bins(machine.id):
-            entities.append(BinLimitNumber(coordinator, entry, machine, bin_no))
+    for machine_id in machine_ids:
+        for bin_no in coordinator.active_bins(machine_id):
+            entities.append(
+                BinLimitNumber(
+                    hass=hass,
+                    entry=entry,
+                    coordinator=coordinator,
+                    machine_id=machine_id,
+                    machine_name=machine_name_map.get(machine_id, machine_id),
+                    bin_no=bin_no,
+                )
+            )
 
     async_add_entities(entities)
 
 
-class BaseNumber(CoordinatorEntity[EnvipcoCoordinator], NumberEntity):
-    """Base number entity."""
-
+class BinLimitNumber(CoordinatorEntity[EnvipcoCoordinator], NumberEntity):
     _attr_has_entity_name = True
     _attr_mode = NumberMode.BOX
+    _attr_native_min_value = 0
+    _attr_native_max_value = 10000
+    _attr_native_step = 1
+    _attr_icon = "mdi:trash-can-outline"
+    _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(
         self,
-        coordinator: EnvipcoCoordinator,
+        hass: HomeAssistant,
         entry: ConfigEntry,
-        machine: NumberMachineDef,
+        coordinator: EnvipcoCoordinator,
+        machine_id: str,
+        machine_name: str,
+        bin_no: int,
     ) -> None:
-        """Init base number."""
         super().__init__(coordinator)
+        self.hass = hass
         self.entry = entry
-        self.machine = machine
+        self.machine_id = machine_id
+        self.machine_name = machine_name
+        self.bin_no = bin_no
+
+        self._attr_unique_id = _number_unique_id(machine_id, bin_no)
+        self._attr_name = f"Bin {bin_no} limiet"
+
+        material = coordinator.bin_material(machine_id, bin_no)
+        fallback = DEFAULT_BIN_CAPACITY_BY_MATERIAL.get(material) if material else None
+        api_limit = coordinator.current_bin_limit(machine_id, bin_no)
+
+        suggestions: list[int] = []
+        if fallback:
+            suggestions.append(int(fallback))
+        if api_limit:
+            try:
+                suggestions.append(int(api_limit))
+            except (TypeError, ValueError):
+                pass
+
+        if suggestions:
+            highest = max(suggestions)
+            self._attr_native_max_value = max(10000, highest * 2)
 
     @property
     def device_info(self):
-        """Attach entity to the machine device."""
-        return self.coordinator.machine_device_info(self.machine.id)
+        return self.coordinator.machine_device_info(self.machine_id)
+
+    @property
+    def available(self) -> bool:
+        return self.bin_no in self.coordinator.active_bins(self.machine_id)
 
     @property
     def suggested_object_id(self) -> str | None:
-        """Stable suggested object id."""
-        unique_id = getattr(self, "_attr_unique_id", None)
-        if unique_id:
-            return slugify(str(unique_id), separator="_")
-        return slugify(f"{self.machine.id}_{self.__class__.__name__.lower()}", separator="_")
-
-    def _machine_options(self) -> dict[str, Any]:
-        """Return current options dict."""
-        return dict(self.entry.options)
-
-    def _configured_limits(self) -> dict[str, Any]:
-        """Return all configured machine bin limits."""
-        options = self._machine_options()
-        return dict(options.get("machine_bin_limits", self.entry.data.get("machine_bin_limits", {})) or {})
-
-    def _machine_limit_map(self) -> dict[str, Any]:
-        """Return bin-limit map for current machine."""
-        return dict(self._configured_limits().get(self.machine.id, {}) or {})
-
-
-class BinLimitNumber(BaseNumber):
-    """Editable bin capacity/limit for one active bin."""
-
-    _attr_icon = "mdi:tune-vertical"
-    _attr_native_min_value = 0
-    _attr_native_max_value = 500000
-    _attr_native_step = 1
-
-    def __init__(
-        self,
-        coordinator: EnvipcoCoordinator,
-        entry: ConfigEntry,
-        machine: NumberMachineDef,
-        bin_no: int,
-    ) -> None:
-        """Init bin limit entity."""
-        super().__init__(coordinator, entry, machine)
-        self.bin_no = bin_no
-        self._attr_unique_id = f"{machine.id}_bin_{bin_no}_limit_number"
-
-    def _material(self) -> str | None:
-        """Return normalized material."""
-        return self.coordinator.bin_material(self.machine.id, self.bin_no)
-
-    def _label(self) -> str:
-        """Return friendly entity label."""
-        return bin_label(self._material(), self.bin_no)
-
-    @property
-    def name(self) -> str:
-        """Return entity name."""
-        return f"{self._label()} limiet"
+        return slugify(str(self._attr_unique_id), separator="_")
 
     @property
     def native_value(self) -> float:
-        """Return current active limit."""
-        value = self.coordinator.current_bin_limit(self.machine.id, self.bin_no)
-        if value is None:
-            return 0.0
-        return float(value)
+        value = self.coordinator.configured_bin_limit(self.machine_id, self.bin_no)
+        if value is not None:
+            return float(value)
+
+        current = self.coordinator.current_bin_limit(self.machine_id, self.bin_no)
+        if current is not None:
+            return float(current)
+
+        return 0.0
 
     @property
-    def extra_state_attributes(self):
-        """Extra attributes."""
+    def extra_state_attributes(self) -> dict[str, Any]:
+        material = self.coordinator.bin_material(self.machine_id, self.bin_no)
+        fallback = DEFAULT_BIN_CAPACITY_BY_MATERIAL.get(material) if material else None
+        api_limit = self.coordinator.safe_int(
+            self.coordinator.rvm_data(self.machine_id).get(f"BinInfoLimitBin{self.bin_no}")
+        ) or None
+
         return {
+            "machine_id": self.machine_id,
+            "machine_name": self.machine_name,
             "bin_nummer": self.bin_no,
-            "materiaal": material_label(self._material()),
-            "api_limiet": self.coordinator.safe_int(
-                self.coordinator.rvm_data(self.machine.id).get(f"BinInfoLimitBin{self.bin_no}")
-            ),
-            "ingestelde_limiet": self.coordinator.configured_bin_limit(self.machine.id, self.bin_no),
-            "api_vulling_percentage": self.coordinator.bin_full_percent(self.machine.id, self.bin_no),
-            "api_aantal": self.coordinator.bin_count(self.machine.id, self.bin_no),
+            "materiaal": material,
+            "api_limiet": api_limit,
+            "fallback_limiet": fallback,
+            "actieve_limiet": self.coordinator.current_bin_limit(self.machine_id, self.bin_no),
         }
 
     async def async_set_native_value(self, value: float) -> None:
-        """Persist new bin limit to config entry options."""
         new_value = int(round(value))
 
-        options = dict(self.entry.options)
-        all_limits = dict(
-            options.get(
-                "machine_bin_limits",
-                self.entry.data.get("machine_bin_limits", {}),
-            )
-            or {}
-        )
+        all_limits = dict(self.entry.options.get(CONF_MACHINE_BIN_LIMITS, {}) or {})
+        machine_limits = dict(all_limits.get(self.machine_id, {}) or {})
 
-        machine_limits = dict(all_limits.get(self.machine.id, {}) or {})
         machine_limits[str(self.bin_no)] = new_value
-        all_limits[self.machine.id] = machine_limits
+        all_limits[self.machine_id] = machine_limits
 
-        options["machine_bin_limits"] = all_limits
+        new_options = dict(self.entry.options)
+        new_options[CONF_MACHINE_BIN_LIMITS] = all_limits
 
-        self.hass.config_entries.async_update_entry(self.entry, options=options)
+        domain_data = self.hass.data[DOMAIN][self.entry.entry_id]
+        domain_data["suppress_reload_once"] = True
+
+        self.hass.config_entries.async_update_entry(self.entry, options=new_options)
 
         updated_entry = self.hass.config_entries.async_get_entry(self.entry.entry_id)
         if updated_entry is not None:
             self.entry = updated_entry
+            self.coordinator.entry = updated_entry
 
-        await self.coordinator.async_request_refresh()
-
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        """Handle updated data from coordinator."""
         self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()

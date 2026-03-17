@@ -38,11 +38,6 @@ async def _async_cleanup_inactive_bin_entities(
     entry: ConfigEntry,
     coordinator: EnvipcoCoordinator,
 ) -> None:
-    """Hard cleanup of old inactive bin entities from the entity registry.
-
-    This runs before platform setup so old bin entities are removed even if
-    previous versions created them with slightly different patterns.
-    """
     entity_registry = er.async_get(hass)
 
     machine_ids = [machine.id for machine in coordinator.machines()]
@@ -166,7 +161,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await coordinator.async_config_entry_first_refresh()
         await coordinator.async_refresh_machine_meta_once(force=True)
 
-        # HARD CLEANUP BEFORE LOADING PLATFORMS
         await _async_cleanup_inactive_bin_entities(hass, entry, coordinator)
 
         device_registry = async_get_device_registry(hass)

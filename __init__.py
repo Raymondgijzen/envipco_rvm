@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
@@ -20,6 +21,64 @@ from .const import (
     PLATFORMS,
 )
 from .coordinator import EnvipcoCoordinator
+
+
+def _extract_bin_number(text: str) -> int | None:
+    match = re.search(r"_bin_(\d+)_", text)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+async def _async_cleanup_inactive_bin_entities(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    coordinator: EnvipcoCoordinator,
+) -> None:
+    """Hard cleanup of old inactive bin entities from the entity registry.
+
+    This runs before platform setup so old bin entities are removed even if
+    previous versions created them with slightly different patterns.
+    """
+    entity_registry = er.async_get(hass)
+
+    machine_ids = [machine.id for machine in coordinator.machines()]
+    active_by_machine: dict[str, set[int]] = {
+        machine_id: set(coordinator.active_bins(machine_id))
+        for machine_id in machine_ids
+    }
+
+    for entity_entry in list(entity_registry.entities.values()):
+        if entity_entry.config_entry_id != entry.entry_id:
+            continue
+
+        unique_id = (entity_entry.unique_id or "").strip()
+        entity_id = (entity_entry.entity_id or "").strip()
+        target_text = unique_id or entity_id
+
+        if "_bin_" not in target_text:
+            continue
+
+        machine_id = None
+        for current_machine_id in machine_ids:
+            if target_text.startswith(f"{current_machine_id}_bin_"):
+                machine_id = current_machine_id
+                break
+
+        if machine_id is None:
+            continue
+
+        bin_no = _extract_bin_number(target_text)
+        if bin_no is None:
+            continue
+
+        if bin_no in active_by_machine.get(machine_id, set()):
+            continue
+
+        entity_registry.async_remove(entity_entry.entity_id)
 
 
 async def _async_apply_registry_naming(
@@ -106,6 +165,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     try:
         await coordinator.async_config_entry_first_refresh()
         await coordinator.async_refresh_machine_meta_once(force=True)
+
+        # HARD CLEANUP BEFORE LOADING PLATFORMS
+        await _async_cleanup_inactive_bin_entities(hass, entry, coordinator)
 
         device_registry = async_get_device_registry(hass)
         for machine in coordinator.machines():

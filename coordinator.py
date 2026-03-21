@@ -13,8 +13,6 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import EnvipcoApiError, EnvipcoRvmApiClient, EnvipcoThrottleError
 from .const import (
     ACCEPT_FIELDS_PREFIX,
-    BIN_COUNT_PREFIX,
-    BIN_FULL_PREFIX,
     BIN_LIMIT_PREFIX,
     BIN_MATERIAL_PREFIX,
     CONF_MACHINE_BIN_LIMITS,
@@ -36,6 +34,25 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Values from the API that should be treated as "no material configured"
+INACTIVE_MATERIAL_VALUES = {
+    "",
+    "UNKNOWN",
+    "UNBEKEND",
+    "NONE",
+    "NULL",
+    "N/A",
+    "NA",
+    "-",
+    "--",
+    "EMPTY",
+    "NOT_USED",
+    "NOTUSED",
+    "UNUSED",
+    "INACTIVE",
+    "0",
+}
+
 
 @dataclass(slots=True)
 class MachineDef:
@@ -44,12 +61,27 @@ class MachineDef:
 
 
 def normalize_material(raw: Any) -> str | None:
+    """Normalize material value.
+
+    Unused bins often come back as 'Unknown'. Those must be treated as inactive.
+    """
     if raw is None:
         return None
+
     text = str(raw).strip().upper()
     if not text:
         return None
-    return MATERIAL_MAP.get(text, text)
+
+    if text in INACTIVE_MATERIAL_VALUES:
+        return None
+
+    mapped = MATERIAL_MAP.get(text, text)
+    mapped_text = str(mapped).strip().upper()
+
+    if mapped_text in INACTIVE_MATERIAL_VALUES:
+        return None
+
+    return mapped_text
 
 
 class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -258,32 +290,33 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return info
 
     def active_bins(self, rvm_id: str) -> list[int]:
+        """Return active bins based only on material.
+
+        Unknown/unset material counts as inactive.
+        """
         rvm = self.rvm_data(rvm_id)
         active: list[int] = []
+
         for bin_no in range(1, 13):
             material = normalize_material(rvm.get(f"{BIN_MATERIAL_PREFIX}{bin_no}"))
-            count = rvm.get(f"{BIN_COUNT_PREFIX}{bin_no}")
-            full = rvm.get(f"{BIN_FULL_PREFIX}{bin_no}")
-            if material:
+            if material is not None:
                 active.append(bin_no)
-                continue
-            if count not in (None, "", 0, "0"):
-                active.append(bin_no)
-                continue
-            if full not in (None, "", 0, "0", False, "false", "False"):
-                active.append(bin_no)
+
         return active
 
     def current_bin_limit(self, rvm_id: str, bin_no: int) -> int | None:
         configured = self.configured_bin_limit(rvm_id, bin_no)
         if configured is not None:
             return configured
+
         api_value = self.safe_int(self.rvm_data(rvm_id).get(f"{BIN_LIMIT_PREFIX}{bin_no}"))
         if api_value > 0:
             return api_value
+
         material = normalize_material(self.rvm_data(rvm_id).get(f"{BIN_MATERIAL_PREFIX}{bin_no}"))
         if material:
             return DEFAULT_BIN_CAPACITY_BY_MATERIAL.get(material)
+
         return None
 
     def bin_material(self, rvm_id: str, bin_no: int) -> str | None:
@@ -298,6 +331,7 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return self.accepted_glass(rvm_id)
         if key == "accepted_total":
             return self.accepted_total(rvm_id)
+
         data = self.data or {}
         totals = (data.get("totals", {}) or {}).get(rvm_id, {}) or {}
         return self.safe_int(totals.get(key))
@@ -317,9 +351,11 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_refresh_machine_meta_once(self, force: bool = False) -> None:
         site_ids: set[str] = set()
         stats = (self.data or {}).get("stats", {}) or {}
+
         for rvm_id in self.rvm_ids():
             if not force and self.machine_meta(rvm_id).get("machine_type") and self.machine_meta(rvm_id).get("add_date"):
                 continue
+
             rvm = stats.get(rvm_id, {}) or {}
             site_id = str(rvm.get("SiteId") or rvm.get("SiteInfoSiteId") or "").strip()
             if site_id:
@@ -330,6 +366,7 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         new_meta = dict(self._machine_meta_cache)
         changed = False
+
         for site_id in sorted(site_ids):
             try:
                 site_data = await self.client.site_data(site_id)
@@ -354,12 +391,15 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for machine in site_data.get("currentRVMs", []) or []:
                 if not isinstance(machine, dict):
                     continue
+
                 serial = str(machine.get("machineSerialNumber") or "").strip()
                 if not serial:
                     continue
+
                 remove_date = str(machine.get("removeDate") or "").strip()
                 if remove_date:
                     continue
+
                 existing = dict(new_meta.get(serial, {}) or {})
                 merged = {
                     **existing,
@@ -390,10 +430,13 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _get_rejects_rows(self) -> list[dict[str, str]]:
         now = datetime.utcnow()
+
         if self._last_rejects_fetch and (now - self._last_rejects_fetch).total_seconds() < self._rejects_interval_seconds():
             return self._rejects_cache
+
         if self._rejects_throttle_until and now < self._rejects_throttle_until:
             return self._rejects_cache
+
         try:
             rows = await self.client.rejects(self.rvm_ids(), date.today(), date.today(), include_acceptance=True)
             self._rejects_cache = rows
@@ -410,6 +453,7 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_update_data(self) -> dict[str, Any]:
         now = datetime.utcnow()
+
         if self._stats_throttle_until and now < self._stats_throttle_until:
             wait = int((self._stats_throttle_until - now).total_seconds())
             self._last_error = f"HTTP 429: Request was throttled. Expected available in {wait} seconds."
@@ -457,6 +501,7 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 key_text = str(key or "").strip()
                 if not key_text.lower().startswith(ACCEPT_FIELDS_PREFIX.lower()):
                     continue
+
                 lowered = key_text.lower()
                 if "can" in lowered or "alu" in lowered or "steel" in lowered:
                     accepted_by_machine[machine_id][KEY_ACCEPTED_CANS] += self.safe_int(value)
@@ -475,6 +520,7 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             denominator = accepted_total + rejects_total
             reject_rate = round((rejects_total / denominator) * 100, 1) if denominator else 0.0
             rate_can, rate_pet = self.machine_rates(rvm_id)
+
             totals[rvm_id] = {
                 "accepted_cans": accepted_cans,
                 "accepted_pet": accepted_pet,

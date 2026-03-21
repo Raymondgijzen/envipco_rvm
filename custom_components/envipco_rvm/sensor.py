@@ -1,9 +1,4 @@
-"""Sensor platform for Envipco RVM.
-
-This file intentionally keeps entity classes thin.
-Complex API logic and derived calculations live in the coordinator,
-so sensors stay predictable and easier to debug.
-"""
+"""Sensor platform for Envipco RVM."""
 
 from __future__ import annotations
 
@@ -23,7 +18,6 @@ from homeassistant.util import slugify
 from .const import (
     BIN_COUNT_PREFIX,
     BIN_FULL_PREFIX,
-    BIN_MATERIAL_PREFIX,
     CONF_MACHINES,
     DEFAULT_BIN_CAPACITY_BY_MATERIAL,
     DOMAIN,
@@ -87,10 +81,15 @@ def material_label(material: str | None) -> str | None:
     return MATERIAL_LABELS_NL.get(material, material)
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
     coordinator: EnvipcoCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     machines_cfg = entry.options.get(CONF_MACHINES, entry.data.get(CONF_MACHINES, [])) or []
     machines: list[SensorMachineDef] = []
+
     for item in machines_cfg:
         if not isinstance(item, dict):
             continue
@@ -98,38 +97,107 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         if not machine_id:
             continue
         machines.append(SensorMachineDef(id=machine_id, name=str(item.get("name") or machine_id)))
-    entities: list[SensorEntity] = []
 
-    # Each RVM gets its own machine-oriented entity set.
-    # The coordinator does the heavy lifting; the entities mostly expose values cleanly.
+    entities: list[SensorEntity] = [
+        PlatformLastContactSensor(coordinator, entry),
+        PlatformLastStatsFetchSensor(coordinator, entry),
+        PlatformLastRejectsFetchSensor(coordinator, entry),
+    ]
+
     for machine in machines:
-        entities.extend([
-            StatusSensor(coordinator, machine),
-            LastReportSensor(coordinator, machine),
-            LastReportTextSensor(coordinator, machine),
-            LastSuccessfulUpdateSensor(coordinator, machine),
-            ApiThrottleStatusSensor(coordinator, machine),
-            ApiThrottleSecondsSensor(coordinator, machine),
-            AcceptedTotalSensor(coordinator, machine),
-            AcceptedCansSensor(coordinator, machine),
-            AcceptedPetSensor(coordinator, machine),
-            RejectTotalSensor(coordinator, machine),
-            RejectRateSensor(coordinator, machine),
-            RevenueTodaySensor(coordinator, machine),
-            RevenueCanTodaySensor(coordinator, machine),
-            RevenuePetTodaySensor(coordinator, machine),
-            LocationInfoSensor(coordinator, machine),
-        ])
+        entities.extend(
+            [
+                StatusSensor(coordinator, machine),
+                LastReportSensor(coordinator, machine),
+                LastReportTextSensor(coordinator, machine),
+                LastSuccessfulUpdateSensor(coordinator, machine),
+                ApiThrottleStatusSensor(coordinator, machine),
+                ApiThrottleSecondsSensor(coordinator, machine),
+                AcceptedTotalSensor(coordinator, machine),
+                AcceptedCansSensor(coordinator, machine),
+                AcceptedPetSensor(coordinator, machine),
+                RejectTotalSensor(coordinator, machine),
+                RejectRateSensor(coordinator, machine),
+                RevenueTodaySensor(coordinator, machine),
+                RevenueCanTodaySensor(coordinator, machine),
+                RevenuePetTodaySensor(coordinator, machine),
+                LocationInfoSensor(coordinator, machine),
+            ]
+        )
+
         for reject_key in REJECT_KEYS:
             entities.append(RejectTypeSensor(coordinator, machine, reject_key))
+
         for bin_no in coordinator.active_bins(machine.id):
-            entities.extend([
-                BinCountSensor(coordinator, machine, bin_no),
-                BinLimitSensor(coordinator, machine, bin_no),
-                BinPercentageSensor(coordinator, machine, bin_no),
-            ])
+            entities.extend(
+                [
+                    BinCountSensor(coordinator, machine, bin_no),
+                    BinLimitSensor(coordinator, machine, bin_no),
+                    BinPercentageSensor(coordinator, machine, bin_no),
+                ]
+            )
 
     async_add_entities(entities)
+
+
+class PlatformBaseSensor(CoordinatorEntity[EnvipcoCoordinator], SensorEntity):
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    def __init__(self, coordinator: EnvipcoCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self.entry = entry
+
+    @property
+    def device_info(self):
+        return self.coordinator.integration_device_info()
+
+    @property
+    def suggested_object_id(self) -> str | None:
+        unique_id = getattr(self, "_attr_unique_id", None)
+        if unique_id:
+            return slugify(str(unique_id), separator="_")
+        return None
+
+
+class PlatformLastContactSensor(PlatformBaseSensor):
+    _attr_name = "Laatste platform connectie"
+    _attr_icon = "mdi:cloud-check-outline"
+
+    def __init__(self, coordinator: EnvipcoCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_platform_last_contact"
+
+    @property
+    def native_value(self):
+        return parse_timestamp(self.coordinator.last_platform_contact)
+
+
+class PlatformLastStatsFetchSensor(PlatformBaseSensor):
+    _attr_name = "Laatste status info update"
+    _attr_icon = "mdi:update"
+
+    def __init__(self, coordinator: EnvipcoCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_platform_last_stats_fetch"
+
+    @property
+    def native_value(self):
+        return parse_timestamp(self.coordinator.last_stats_fetch)
+
+
+class PlatformLastRejectsFetchSensor(PlatformBaseSensor):
+    _attr_name = "Laatste rejects update"
+    _attr_icon = "mdi:file-chart-outline"
+
+    def __init__(self, coordinator: EnvipcoCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_platform_last_rejects_fetch"
+
+    @property
+    def native_value(self):
+        return parse_timestamp(self.coordinator.last_rejects_successful_fetch)
 
 
 class BaseSensor(CoordinatorEntity[EnvipcoCoordinator], SensorEntity):
@@ -247,7 +315,10 @@ class ApiThrottleSecondsSensor(BaseSensor):
 
     @property
     def native_value(self):
-        return max(self.coordinator.stats_throttle_remaining, self.coordinator.rejects_throttle_remaining)
+        return max(
+            self.coordinator.stats_throttle_remaining,
+            self.coordinator.rejects_throttle_remaining,
+        )
 
 
 class AcceptedTotalSensor(BaseSensor):
@@ -429,8 +500,11 @@ class BinBaseSensor(BaseSensor):
         super().__init__(coordinator, machine)
         self.bin_no = bin_no
 
+    def _raw_material(self):
+        return self.coordinator.raw_bin_material(self.machine.id, self.bin_no)
+
     def _material(self) -> str | None:
-        return normalize_material(self._rvm().get(f"{BIN_MATERIAL_PREFIX}{self.bin_no}"))
+        return normalize_material(self._raw_material())
 
     def _material_label(self) -> str | None:
         return material_label(self._material())
@@ -444,6 +518,15 @@ class BinBaseSensor(BaseSensor):
 
     def _full(self):
         return self._rvm().get(f"{BIN_FULL_PREFIX}{self.bin_no}")
+
+    def _debug_attributes(self) -> dict[str, Any]:
+        material = self._material()
+        return {
+            "debug_raw_materiaal": self._raw_material(),
+            "debug_genormaliseerd_materiaal": material,
+            "debug_bin_actief_op_basis_van_materiaal": material is not None,
+            "debug_bron_actieve_bin": "materiaal",
+        }
 
 
 class BinCountSensor(BinBaseSensor):
@@ -462,11 +545,13 @@ class BinCountSensor(BinBaseSensor):
 
     @property
     def extra_state_attributes(self):
-        return {
+        data = {
             "materiaal": self._material_label(),
             "bin_full": self._full(),
             "actieve_limiet": self.coordinator.current_bin_limit(self.machine.id, self.bin_no),
         }
+        data.update(self._debug_attributes())
+        return data
 
 
 class BinLimitSensor(BinBaseSensor):
@@ -484,11 +569,27 @@ class BinLimitSensor(BinBaseSensor):
 
     @property
     def extra_state_attributes(self):
-        return {
+        configured = self.coordinator.configured_bin_limit(self.machine.id, self.bin_no)
+        api_limit = self.coordinator.safe_int(self._rvm().get(f"BinInfoLimitBin{self.bin_no}")) or None
+        material = self._material()
+
+        if configured is not None:
+            bron_limiet = "handmatig"
+        elif api_limit is not None:
+            bron_limiet = "api"
+        elif material is not None:
+            bron_limiet = "fallback_materiaal"
+        else:
+            bron_limiet = None
+
+        data = {
             "materiaal": self._material_label(),
-            "api_limiet": self.coordinator.safe_int(self._rvm().get(f"BinInfoLimitBin{self.bin_no}")) or None,
-            "ingestelde_limiet": self.coordinator.configured_bin_limit(self.machine.id, self.bin_no),
+            "api_limiet": api_limit,
+            "ingestelde_limiet": configured,
+            "bron_limiet": bron_limiet,
         }
+        data.update(self._debug_attributes())
+        return data
 
 
 class BinPercentageSensor(BinBaseSensor):
@@ -512,9 +613,11 @@ class BinPercentageSensor(BinBaseSensor):
     @property
     def extra_state_attributes(self):
         material = self._material()
-        return {
+        data = {
             "materiaal": self._material_label(),
             "aantal": self._count(),
             "actieve_limiet": self.coordinator.current_bin_limit(self.machine.id, self.bin_no),
             "fallback_materiaal_limiet": DEFAULT_BIN_CAPACITY_BY_MATERIAL.get(material) if material else None,
         }
+        data.update(self._debug_attributes())
+        return data

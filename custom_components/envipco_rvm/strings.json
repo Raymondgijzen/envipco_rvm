@@ -4,66 +4,105 @@
     "step": {
       "user": {
         "title": "Koppelen met ePortal",
-        "description": "Vul je ePortal inloggegevens in. Deze nieuwe integratie gebruikt een nieuw domein, zodat oude entity-history van envipco_eportal niet in de weg zit.",
+        "description": "Vul je ePortal inloggegevens in.",
         "data": {
           "username": "Gebruikersnaam",
           "password": "Wachtwoord",
-          "scan_interval": "Update interval (seconden)"
+          "rvmstats_interval": "RVM stats interval (seconden)",
+          "rejects_interval": "Rejects interval (seconden)"
         }
+      },
+      "select_machines": {
+        "title": "Selecteer automaten",
+        "description": "Kies welke automaten je wilt toevoegen aan Home Assistant.",
+        "data": {
+          "selected_machines": "Automaten"
+        }
+      },
+      "name_machines": {
+        "title": "Geef namen",
+        "description": "Geef per geselecteerde automaat een herkenbare naam.",
+        "data": {}
       }
     },
     "abort": {
       "already_configured": "Deze ePortal koppeling bestaat al."
     },
     "error": {
-      "cannot_connect": "Kan geen verbinding maken met ePortal."
+      "cannot_connect": "Kan geen verbinding maken met ePortal.",
+      "no_machines_found": "Er zijn geen automaten gevonden voor deze login.",
+      "select_at_least_one_machine": "Selecteer minimaal één automaat."
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "Opties",
-        "description": "Scan zoekt alleen naar nieuwe automaten.",
+        "description": "Pas de intervallen aan en kies of je de machine-selectie wilt beheren.",
         "data": {
-          "scan_interval": "Update interval (seconden)",
-          "scan_for_new": "Scan op nieuwe automaten"
+          "rvmstats_interval": "RVM stats interval (seconden)",
+          "rejects_interval": "Rejects interval (seconden)",
+          "manage_machines": "Machine-selectie beheren"
         }
       },
-      "select_new": {
-        "title": "Nieuwe automaten gevonden",
-        "description": "Selecteer welke nieuwe automaten je wilt toevoegen.",
+      "manage_machines": {
+        "title": "Selecteer automaten",
+        "description": "Kies welke automaten actief moeten blijven in deze integratie.",
         "data": {
-          "new_machines": "Nieuwe automaten"
+          "selected_machines": "Automaten"
         }
       },
-      "name_new": {
+      "name_machines": {
         "title": "Geef namen",
-        "description": "Geef een naam per nieuwe automaat.",
+        "description": "Geef per geselecteerde automaat een herkenbare naam.",
         "data": {}
       },
       "rates": {
         "title": "Vergoedingen per automaat",
-        "description": "Stel per automaat de vergoeding in voor CAN en PET.",
+        "description": "Stel per automaat de vergoeding in voor blik en PET.",
         "data": {}
       }
     },
     "error": {
-      "cannot_connect": "Kan geen verbinding maken met ePortal."
+      "cannot_connect": "Kan geen verbinding maken met ePortal.",
+      "select_at_least_one_machine": "Selecteer minimaal één automaat."
     }
   },
   "entity": {
     "sensor": {
-      "status": {"name": "Status"},
-      "last_report": {"name": "Laatste rapport"},
-      "last_report_text": {"name": "Laatste rapport tekst"},
-      "accepted_total": {"name": "Geaccepteerd totaal"},
-      "accepted_cans": {"name": "Geaccepteerd blik"},
-      "accepted_pet": {"name": "Geaccepteerd PET"},
-      "reject_total": {"name": "Afgekeurd totaal"},
-      "reject_rate": {"name": "Afkeurpercentage"},
-      "revenue_today": {"name": "Opbrengst vandaag"},
-      "revenue_can_today": {"name": "Opbrengst blik vandaag"},
-      "revenue_pet_today": {"name": "Opbrengst PET vandaag"}
+      "status": {
+        "name": "Status"
+      },
+      "last_report": {
+        "name": "Laatste rapport"
+      },
+      "last_report_text": {
+        "name": "Laatste rapport tekst"
+      },
+      "accepted_total": {
+        "name": "Geaccepteerd totaal"
+      },
+      "accepted_cans": {
+        "name": "Geaccepteerd blik"
+      },
+      "accepted_pet": {
+        "name": "Geaccepteerd PET"
+      },
+      "reject_total": {
+        "name": "Afgekeurd totaal"
+      },
+      "reject_rate": {
+        "name": "Afkeurpercentage"
+      },
+      "revenue_today": {
+        "name": "Opbrengst vandaag"
+      },
+      "revenue_can_today": {
+        "name": "Opbrengst blik vandaag"
+      },
+      "revenue_pet_today": {
+        "name": "Opbrengst PET vandaag"
+      }
     }
   }
 }

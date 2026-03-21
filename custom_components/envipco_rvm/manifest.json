@@ -1,7 +1,7 @@
 {
   "domain": "envipco_rvm",
   "name": "Envipco RVM",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "documentation": "https://github.com/Raymondgijzen/envipco_rvm",
   "issue_tracker": "https://github.com/Raymondgijzen/envipco_rvm/issues",
   "requirements": [],
@@ -10,5 +10,5 @@
   ],
   "iot_class": "cloud_polling",
   "config_flow": true,
-  "integration_type": "service"
+  "integration_type": "hub"
 }

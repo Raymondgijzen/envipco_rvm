@@ -138,6 +138,51 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def last_rejects_successful_fetch(self) -> datetime | None:
         return self._last_rejects_successful_fetch
 
+    @property
+    def last_successful_update(self) -> datetime | None:
+        return self._last_successful_update
+
+    @property
+    def last_error(self) -> str | None:
+        return self._last_error
+
+    @property
+    def stats_throttle_remaining(self) -> int:
+        """Seconds remaining for rvmStats throttling."""
+        if not self._stats_throttle_until:
+            return 0
+        remaining = int((self._stats_throttle_until - datetime.utcnow()).total_seconds())
+        return max(0, remaining)
+
+    @property
+    def rejects_throttle_remaining(self) -> int:
+        """Seconds remaining for rejects throttling."""
+        if not self._rejects_throttle_until:
+            return 0
+        remaining = int((self._rejects_throttle_until - datetime.utcnow()).total_seconds())
+        return max(0, remaining)
+
+    @property
+    def stats_throttled(self) -> bool:
+        return self.stats_throttle_remaining > 0
+
+    @property
+    def rejects_throttled(self) -> bool:
+        return self.rejects_throttle_remaining > 0
+
+    @property
+    def throttle_status_text(self) -> str:
+        stats = self.stats_throttle_remaining
+        rejects = self.rejects_throttle_remaining
+
+        if stats > 0 and rejects > 0:
+            return f"rvmStats + rejects geremd ({max(stats, rejects)}s)"
+        if stats > 0:
+            return f"rvmStats geremd ({stats}s)"
+        if rejects > 0:
+            return f"rejects geremd ({rejects}s)"
+        return "Geen throttling"
+
     def mark_platform_contact(self) -> None:
         self._last_platform_contact = datetime.utcnow()
 
@@ -435,8 +480,10 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 merged = {
                     **existing,
                     **{k: v for k, v in site_common.items() if v},
-                    "machine_type": str(machine.get("machineType") or existing.get("machine_type") or "").strip() or existing.get("machine_type"),
-                    "add_date": str(machine.get("addDate") or existing.get("add_date") or "").strip() or existing.get("add_date"),
+                    "machine_type": str(machine.get("machineType") or existing.get("machine_type") or "").strip()
+                    or existing.get("machine_type"),
+                    "add_date": str(machine.get("addDate") or existing.get("add_date") or "").strip()
+                    or existing.get("add_date"),
                 }
                 if merged != existing:
                     new_meta[serial] = merged
@@ -524,7 +571,8 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "rvm",
                     "MachineId",
                     "machineId",
-                ) or ""
+                )
+                or ""
             ).strip()
             if not machine_id:
                 continue

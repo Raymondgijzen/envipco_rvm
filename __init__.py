@@ -1,19 +1,12 @@
 """Home Assistant entry setup for Envipco RVM.
 
-This module wires together the API client, coordinator and platforms.
-It also keeps bin entities in sync with the active bins reported by the API.
-
-Behaviour:
-- active bins are present
-- inactive bins are removed from the entity registry
-- when the active bin layout changes, the integration reloads once
-  so entities are added/removed cleanly
+This version force-removes inactive bin entities from the entity registry.
+That avoids old bin sensors lingering after the active bin layout changed.
 """
 
 from __future__ import annotations
 
 from datetime import timedelta
-import re
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -32,7 +25,13 @@ from .const import (
 )
 from .coordinator import EnvipcoCoordinator
 
-_BIN_UNIQUE_ID_RE = re.compile(r"^(?P<machine>.+?)_bin_(?P<bin_no>\d+)_.+$")
+
+BIN_ENTITY_SUFFIXES = (
+    "count",
+    "active_limit",
+    "percentage",
+    "config_limit",
+)
 
 
 def _current_active_bins_map(coordinator: EnvipcoCoordinator) -> dict[str, tuple[int, ...]]:
@@ -48,6 +47,7 @@ async def _async_apply_registry_naming(
     coordinator: EnvipcoCoordinator,
 ) -> None:
     entity_registry = er.async_get(hass)
+
     for entity_id, entity_entry in list(entity_registry.entities.items()):
         if entity_entry.config_entry_id != entry.entry_id:
             continue
@@ -91,33 +91,54 @@ async def _async_apply_registry_naming(
                 pass
 
 
-async def _async_remove_inactive_bin_entities(
+async def _async_force_remove_inactive_bin_entities(
     hass: HomeAssistant,
     entry: ConfigEntry,
     coordinator: EnvipcoCoordinator,
 ) -> bool:
-    """Remove stale bin entities that do not belong to active bins anymore.
-
-    Returns True when registry changed.
-    """
+    """Force remove all inactive bin entities by exact unique_id/entity_id patterns."""
     entity_registry = er.async_get(hass)
     active_map = _current_active_bins_map(coordinator)
     changed = False
 
+    active_unique_ids = set()
+    for machine_id, active_bins in active_map.items():
+        for bin_no in active_bins:
+            for suffix in BIN_ENTITY_SUFFIXES:
+                active_unique_ids.add(f"{machine_id}_bin_{bin_no}_{suffix}")
+
+    machine_ids = [machine.id for machine in coordinator.machines()]
+
+    for machine_id in machine_ids:
+        for bin_no in range(1, 13):
+            for suffix in BIN_ENTITY_SUFFIXES:
+                unique_id = f"{machine_id}_bin_{bin_no}_{suffix}"
+                if unique_id in active_unique_ids:
+                    continue
+
+                entity_id = entity_registry.async_get_entity_id("sensor", DOMAIN, unique_id)
+                if entity_id is None:
+                    entity_id = entity_registry.async_get_entity_id("number", DOMAIN, unique_id)
+
+                if entity_id is not None:
+                    try:
+                        entity_registry.async_remove(entity_id)
+                        changed = True
+                    except Exception:
+                        pass
+
+    # Safety net: also remove stale entries that still belong to this config entry
+    # and match an inactive bin unique_id pattern.
     for entity_entry in list(entity_registry.entities.values()):
         if entity_entry.config_entry_id != entry.entry_id:
             continue
 
         unique_id = (entity_entry.unique_id or "").strip()
-        match = _BIN_UNIQUE_ID_RE.match(unique_id)
-        if not match:
+        if "_bin_" not in unique_id:
             continue
-
-        machine_id = match.group("machine")
-        bin_no = int(match.group("bin_no"))
-        is_active = bin_no in active_map.get(machine_id, ())
-
-        if is_active:
+        if unique_id in active_unique_ids:
+            continue
+        if not any(unique_id.endswith(f"_{suffix}") for suffix in BIN_ENTITY_SUFFIXES):
             continue
 
         try:
@@ -197,13 +218,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             **coordinator.machine_device_info(machine.id),
         )
 
-    # Remove stale bin entities before platform setup.
-    await _async_remove_inactive_bin_entities(hass, entry, coordinator)
+    await _async_force_remove_inactive_bin_entities(hass, entry, coordinator)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Run again after setup to remove anything that was left from older versions.
-    await _async_remove_inactive_bin_entities(hass, entry, coordinator)
+    await _async_force_remove_inactive_bin_entities(hass, entry, coordinator)
     await _async_apply_registry_naming(hass, entry, coordinator)
 
     @callback
@@ -243,7 +262,7 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
             )
             coordinator.refresh_local_options_from_entry()
             await coordinator.async_request_refresh()
-            await _async_remove_inactive_bin_entities(hass, entry, coordinator)
+            await _async_force_remove_inactive_bin_entities(hass, entry, coordinator)
         return
 
     await async_unload_entry(hass, entry)

@@ -107,6 +107,8 @@ class EnvipcoRvmConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
 
         machines = [{"id": rid, "name": rid} for rid in rvms]
+
+        # Stored for entity-based editing later on device pages.
         machine_rates = {
             rid: {"can": DEFAULT_RATE_CAN, "pet": DEFAULT_RATE_PET} for rid in rvms
         }

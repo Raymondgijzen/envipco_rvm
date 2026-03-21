@@ -3,13 +3,12 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-import re
 from typing import Any
+import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-import logging
 
 from .api import EnvipcoApiError, EnvipcoRvmApiClient, EnvipcoThrottleError
 from .const import (
@@ -71,6 +70,7 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._live_machine_rates: dict[str, dict[str, float]] = {}
         self._live_machine_bin_limits: dict[str, dict[str, int]] = {}
+        self._local_revision = 0
         self.refresh_local_options_from_entry()
 
         self._last_rejects_fetch: datetime | None = None
@@ -85,6 +85,7 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "accepted": {},
             "totals": {},
             "machine_meta": self._machine_meta_cache,
+            "local_revision": self._local_revision,
         }
 
     @staticmethod
@@ -128,23 +129,29 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._live_machine_rates = clean_rates
         self._live_machine_bin_limits = clean_limits
 
+    def push_local_change(self) -> None:
+        """Force coordinator entities to refresh immediately for local config changes."""
+        self._local_revision += 1
+        current = dict(self.data or {})
+        current["local_revision"] = self._local_revision
+        self.async_set_updated_data(current)
+
     def set_live_machine_rate(self, rvm_id: str, rate_key: str, value: float) -> None:
-        """Apply a local rate override immediately in memory."""
         machine_rates = dict(
             self._live_machine_rates.get(
                 rvm_id,
                 {"can": DEFAULT_RATE_CAN, "pet": DEFAULT_RATE_PET},
-            )
-            or {}
+            ) or {}
         )
         machine_rates[rate_key] = round(float(value), 4)
         self._live_machine_rates[rvm_id] = machine_rates
+        self.push_local_change()
 
     def set_live_bin_limit(self, rvm_id: str, bin_no: int, value: int) -> None:
-        """Apply a local bin limit override immediately in memory."""
         machine_limits = dict(self._live_machine_bin_limits.get(rvm_id, {}) or {})
         machine_limits[str(bin_no)] = int(value)
         self._live_machine_bin_limits[rvm_id] = machine_limits
+        self.push_local_change()
 
     def machines(self) -> list[MachineDef]:
         raw = self.entry.options.get(CONF_MACHINES, self.entry.data.get(CONF_MACHINES, [])) or []
@@ -222,7 +229,12 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def machine_site_id(self, rvm_id: str) -> str | None:
         meta = self.machine_meta(rvm_id)
-        value = str(meta.get("site_id") or self.rvm_data(rvm_id).get("SiteId") or self.rvm_data(rvm_id).get("SiteInfoSiteId") or "").strip()
+        value = str(
+            meta.get("site_id")
+            or self.rvm_data(rvm_id).get("SiteId")
+            or self.rvm_data(rvm_id).get("SiteInfoSiteId")
+            or ""
+        ).strip()
         return value or None
 
     def machine_site_name(self, rvm_id: str) -> str | None:
@@ -322,7 +334,10 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             try:
                 site_data = await self.client.site_data(site_id)
             except EnvipcoThrottleError as err:
-                _LOGGER.warning("siteData tijdelijk geremd door API (%s sec); metadata-update wordt later opnieuw geprobeerd", err.seconds)
+                _LOGGER.warning(
+                    "siteData tijdelijk geremd door API (%s sec); metadata-update wordt later opnieuw geprobeerd",
+                    err.seconds,
+                )
                 return
             except Exception:
                 continue
@@ -363,9 +378,15 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.hass.config_entries.async_update_entry(self.entry, options=options)
             self.entry = self.hass.config_entries.async_get_entry(self.entry.entry_id) or self.entry
             self.refresh_local_options_from_entry()
+            self.push_local_change()
 
     def _rejects_interval_seconds(self) -> int:
-        return int(self.entry.options.get(CONF_REJECTS_INTERVAL, self.entry.data.get(CONF_REJECTS_INTERVAL, DEFAULT_REJECTS_INTERVAL)))
+        return int(
+            self.entry.options.get(
+                CONF_REJECTS_INTERVAL,
+                self.entry.data.get(CONF_REJECTS_INTERVAL, DEFAULT_REJECTS_INTERVAL),
+            )
+        )
 
     async def _get_rejects_rows(self) -> list[dict[str, str]]:
         now = datetime.utcnow()
@@ -381,7 +402,10 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return rows
         except EnvipcoThrottleError as err:
             self._rejects_throttle_until = now + timedelta(seconds=err.seconds)
-            _LOGGER.warning("Rejects tijdelijk geremd door API; cached rejects blijven actief voor nog ongeveer %s seconden", err.seconds)
+            _LOGGER.warning(
+                "Rejects tijdelijk geremd door API; cached rejects blijven actief voor nog ongeveer %s seconden",
+                err.seconds,
+            )
             return self._rejects_cache
 
     async def _async_update_data(self) -> dict[str, Any]:
@@ -421,8 +445,7 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "rvm",
                     "MachineId",
                     "machineId",
-                )
-                or ""
+                ) or ""
             ).strip()
             if not machine_id:
                 continue
@@ -444,9 +467,9 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         totals: dict[str, dict[str, Any]] = {}
         for rvm_id in self.rvm_ids():
-            accepted_cans = self.accepted_cans(rvm_id) if stats == (self.data or {}).get("stats") else self.safe_int((stats.get(rvm_id, {}) or {}).get(KEY_ACCEPTED_CANS))
-            accepted_pet = self.accepted_pet(rvm_id) if stats == (self.data or {}).get("stats") else self.safe_int((stats.get(rvm_id, {}) or {}).get(KEY_ACCEPTED_PET))
-            accepted_glass = self.accepted_glass(rvm_id) if stats == (self.data or {}).get("stats") else self.safe_int((stats.get(rvm_id, {}) or {}).get(KEY_ACCEPTED_GLASS))
+            accepted_cans = self.safe_int((stats.get(rvm_id, {}) or {}).get(KEY_ACCEPTED_CANS))
+            accepted_pet = self.safe_int((stats.get(rvm_id, {}) or {}).get(KEY_ACCEPTED_PET))
+            accepted_glass = self.safe_int((stats.get(rvm_id, {}) or {}).get(KEY_ACCEPTED_GLASS))
             accepted_total = accepted_cans + accepted_pet + accepted_glass
             rejects_total = sum(rejects_by_machine[rvm_id].get(key, 0) for key in REJECT_KEYS)
             denominator = accepted_total + rejects_total
@@ -473,4 +496,5 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "accepted": {k: dict(v) for k, v in accepted_by_machine.items()},
             "totals": totals,
             "machine_meta": self._machine_meta_cache,
+            "local_revision": self._local_revision,
         }

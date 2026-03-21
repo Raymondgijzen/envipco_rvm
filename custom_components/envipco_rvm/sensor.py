@@ -276,7 +276,7 @@ class LastSuccessfulUpdateSensor(BaseSensor):
 
     @property
     def native_value(self):
-        return parse_timestamp(self.coordinator.last_successful_update)
+        return parse_timestamp(getattr(self.coordinator, "last_successful_update", None))
 
 
 class ApiThrottleStatusSensor(BaseSensor):
@@ -290,16 +290,16 @@ class ApiThrottleStatusSensor(BaseSensor):
 
     @property
     def native_value(self):
-        return self.coordinator.throttle_status_text
+        return getattr(self.coordinator, "throttle_status_text", "Geen throttling")
 
     @property
     def extra_state_attributes(self):
         return {
-            "rvmstats_geremd": self.coordinator.stats_throttled,
-            "rvmstats_resterend_seconden": self.coordinator.stats_throttle_remaining,
-            "rejects_geremd": self.coordinator.rejects_throttled,
-            "rejects_resterend_seconden": self.coordinator.rejects_throttle_remaining,
-            "laatste_fout": self.coordinator.last_error,
+            "rvmstats_geremd": getattr(self.coordinator, "stats_throttled", False),
+            "rvmstats_resterend_seconden": getattr(self.coordinator, "stats_throttle_remaining", 0),
+            "rejects_geremd": getattr(self.coordinator, "rejects_throttled", False),
+            "rejects_resterend_seconden": getattr(self.coordinator, "rejects_throttle_remaining", 0),
+            "laatste_fout": getattr(self.coordinator, "last_error", None),
         }
 
 
@@ -316,8 +316,8 @@ class ApiThrottleSecondsSensor(BaseSensor):
     @property
     def native_value(self):
         return max(
-            self.coordinator.stats_throttle_remaining,
-            self.coordinator.rejects_throttle_remaining,
+            getattr(self.coordinator, "stats_throttle_remaining", 0),
+            getattr(self.coordinator, "rejects_throttle_remaining", 0),
         )
 
 

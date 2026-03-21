@@ -27,8 +27,6 @@ async def async_setup_entry(
     machines_cfg = entry.options.get(CONF_MACHINES, entry.data.get(CONF_MACHINES, [])) or []
     entities: list[NumberEntity] = []
 
-    # Number entities are only used for local configuration values.
-    # Nothing is written back to the Envipco portal.
     for machine in machines_cfg:
         machine_id = machine.get("id")
         if not machine_id:
@@ -73,27 +71,21 @@ class BaseConfigNumber(CoordinatorEntity[EnvipcoCoordinator], NumberEntity):
         """Write updated options and force immediate HA state refresh."""
         domain_data = self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id)
         if domain_data is not None:
-            # Prevent full unload/reload once; __init__.py update listener handles this.
             domain_data["suppress_reload_once"] = True
 
         self.hass.config_entries.async_update_entry(self.entry, options=options)
 
-        # Refresh local entry reference immediately.
         self.entry = self.hass.config_entries.async_get_entry(self.entry.entry_id) or self.entry
         self.coordinator.entry = self.entry
+        self.coordinator.refresh_local_options_from_entry()
 
-        # Update this number entity instantly.
         self.async_write_ha_state()
-
-        # Force all coordinator-based entities to re-read properties that depend on entry.options,
-        # even if API payload did not change.
         self.coordinator.async_update_listeners()
 
-        # Then do a normal refresh for recalculated values.
-        await self.coordinator.async_request_refresh()
-
-        # One extra listener push after refresh keeps derived sensors in sync immediately.
-        self.coordinator.async_update_listeners()
+        try:
+            await self.coordinator.async_request_refresh()
+        finally:
+            self.coordinator.async_update_listeners()
 
 
 class BinLimitConfigNumber(BaseConfigNumber):
@@ -120,6 +112,13 @@ class BinLimitConfigNumber(BaseConfigNumber):
         return float(self.coordinator.current_bin_limit(self.machine_id, self.bin_no) or 0)
 
     async def async_set_native_value(self, value: float) -> None:
+        rounded = int(round(value))
+
+        # Direct in-memory update so linked sensors change immediately.
+        self.coordinator.set_live_bin_limit(self.machine_id, self.bin_no, rounded)
+        self.async_write_ha_state()
+        self.coordinator.async_update_listeners()
+
         options = dict(self.entry.options)
         all_limits = dict(
             options.get(
@@ -129,7 +128,7 @@ class BinLimitConfigNumber(BaseConfigNumber):
             or {}
         )
         machine_limits = dict(all_limits.get(self.machine_id, {}) or {})
-        machine_limits[str(self.bin_no)] = int(round(value))
+        machine_limits[str(self.bin_no)] = rounded
         all_limits[self.machine_id] = machine_limits
         options[CONF_MACHINE_BIN_LIMITS] = all_limits
 
@@ -163,6 +162,13 @@ class MachineRateConfigNumber(BaseConfigNumber):
         return float(value)
 
     async def async_set_native_value(self, value: float) -> None:
+        rounded = round(float(value), 4)
+
+        # Direct in-memory update so linked sensors change immediately.
+        self.coordinator.set_live_machine_rate(self.machine_id, self.rate_key, rounded)
+        self.async_write_ha_state()
+        self.coordinator.async_update_listeners()
+
         options = dict(self.entry.options)
         all_rates = dict(
             options.get(
@@ -172,7 +178,7 @@ class MachineRateConfigNumber(BaseConfigNumber):
             or {}
         )
         machine_rates = dict(all_rates.get(self.machine_id, {}) or {})
-        machine_rates[self.rate_key] = round(float(value), 4)
+        machine_rates[self.rate_key] = rounded
         all_rates[self.machine_id] = machine_rates
         options[CONF_MACHINE_RATES] = all_rates
 

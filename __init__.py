@@ -4,8 +4,8 @@ This module wires together the API client, coordinator and platforms.
 It also keeps bin entities in sync with the active bins reported by the API.
 
 Behaviour:
-- active bins stay enabled
-- inactive bins are disabled by the integration
+- active bins are present
+- inactive bins are removed from the entity registry
 - when the active bin layout changes, the integration reloads once
   so entities are added/removed cleanly
 """
@@ -36,7 +36,6 @@ _BIN_UNIQUE_ID_RE = re.compile(r"^(?P<machine>.+?)_bin_(?P<bin_no>\d+)_.+$")
 
 
 def _current_active_bins_map(coordinator: EnvipcoCoordinator) -> dict[str, tuple[int, ...]]:
-    """Return current active bin map per machine."""
     result: dict[str, tuple[int, ...]] = {}
     for machine in coordinator.machines():
         result[machine.id] = tuple(sorted(coordinator.active_bins(machine.id)))
@@ -48,7 +47,6 @@ async def _async_apply_registry_naming(
     entry: ConfigEntry,
     coordinator: EnvipcoCoordinator,
 ) -> None:
-    """Force stable entity ids and device names."""
     entity_registry = er.async_get(hass)
     for entity_id, entity_entry in list(entity_registry.entities.items()):
         if entity_entry.config_entry_id != entry.entry_id:
@@ -93,14 +91,14 @@ async def _async_apply_registry_naming(
                 pass
 
 
-async def _async_sync_bin_entity_registry(
+async def _async_remove_inactive_bin_entities(
     hass: HomeAssistant,
     entry: ConfigEntry,
     coordinator: EnvipcoCoordinator,
 ) -> bool:
-    """Enable active bin entities and disable inactive bin entities.
+    """Remove stale bin entities that do not belong to active bins anymore.
 
-    Returns True when registry state changed.
+    Returns True when registry changed.
     """
     entity_registry = er.async_get(hass)
     active_map = _current_active_bins_map(coordinator)
@@ -119,28 +117,14 @@ async def _async_sync_bin_entity_registry(
         bin_no = int(match.group("bin_no"))
         is_active = bin_no in active_map.get(machine_id, ())
 
-        # Disable stale bin entities that no longer belong to an active bin.
-        if not is_active and entity_entry.disabled_by is None:
-            try:
-                entity_registry.async_update_entity(
-                    entity_entry.entity_id,
-                    disabled_by=er.RegistryEntryDisabler.INTEGRATION,
-                )
-                changed = True
-            except Exception:
-                pass
+        if is_active:
             continue
 
-        # Re-enable previously integration-disabled bin entities when the bin becomes active again.
-        if is_active and entity_entry.disabled_by == er.RegistryEntryDisabler.INTEGRATION:
-            try:
-                entity_registry.async_update_entity(
-                    entity_entry.entity_id,
-                    disabled_by=None,
-                )
-                changed = True
-            except Exception:
-                pass
+        try:
+            entity_registry.async_remove(entity_entry.entity_id)
+            changed = True
+        except Exception:
+            pass
 
     return changed
 
@@ -149,7 +133,6 @@ async def _async_process_coordinator_update(
     hass: HomeAssistant,
     entry: ConfigEntry,
 ) -> None:
-    """Reload when the active bin layout changed."""
     domain_data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
     if not domain_data:
         return
@@ -174,7 +157,6 @@ async def _async_process_coordinator_update(
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Envipco RVM from a config entry."""
     from .api import EnvipcoRvmApiClient
 
     session = async_get_clientsession(hass)
@@ -215,14 +197,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             **coordinator.machine_device_info(machine.id),
         )
 
-    # First sync registry state so active previously-disabled bins can be re-enabled
-    # before the platforms are forwarded.
-    await _async_sync_bin_entity_registry(hass, entry, coordinator)
+    # Remove stale bin entities before platform setup.
+    await _async_remove_inactive_bin_entities(hass, entry, coordinator)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Run once more after platform setup to catch anything newly created.
-    await _async_sync_bin_entity_registry(hass, entry, coordinator)
+    # Run again after setup to remove anything that was left from older versions.
+    await _async_remove_inactive_bin_entities(hass, entry, coordinator)
     await _async_apply_registry_naming(hass, entry, coordinator)
 
     @callback
@@ -235,7 +216,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload Envipco RVM entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
@@ -245,7 +225,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload entry, unless a local config-only change can be handled live."""
     domain_data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
 
     if domain_data:
@@ -262,8 +241,9 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
                     entry.data.get(CONF_RVMSTATS_INTERVAL, DEFAULT_RVMSTATS_INTERVAL),
                 )
             )
+            coordinator.refresh_local_options_from_entry()
             await coordinator.async_request_refresh()
-            await _async_sync_bin_entity_registry(hass, entry, coordinator)
+            await _async_remove_inactive_bin_entities(hass, entry, coordinator)
         return
 
     await async_unload_entry(hass, entry)

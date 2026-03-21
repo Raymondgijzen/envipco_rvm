@@ -34,7 +34,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Values from the API that should be treated as "no material configured"
+# API values that mean: this bin is not configured / not used
 INACTIVE_MATERIAL_VALUES = {
     "",
     "UNKNOWN",
@@ -61,9 +61,10 @@ class MachineDef:
 
 
 def normalize_material(raw: Any) -> str | None:
-    """Normalize material value.
+    """Normalize material.
 
-    Unused bins often come back as 'Unknown'. Those must be treated as inactive.
+    Unused bins often come back as 'Unknown'.
+    Those must count as inactive.
     """
     if raw is None:
         return None
@@ -78,7 +79,7 @@ def normalize_material(raw: Any) -> str | None:
     mapped = MATERIAL_MAP.get(text, text)
     mapped_text = str(mapped).strip().upper()
 
-    if mapped_text in INACTIVE_MATERIAL_VALUES:
+    if not mapped_text or mapped_text in INACTIVE_MATERIAL_VALUES:
         return None
 
     return mapped_text
@@ -221,6 +222,9 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         data = self.data or {}
         return (data.get("stats", {}) or {}).get(rvm_id, {}) or {}
 
+    def raw_bin_material(self, rvm_id: str, bin_no: int) -> Any:
+        return self.rvm_data(rvm_id).get(f"{BIN_MATERIAL_PREFIX}{bin_no}")
+
     def machine_meta(self, rvm_id: str) -> dict[str, Any]:
         return self._machine_meta_cache.get(rvm_id, {}) or {}
 
@@ -294,14 +298,11 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         Unknown/unset material counts as inactive.
         """
-        rvm = self.rvm_data(rvm_id)
         active: list[int] = []
-
         for bin_no in range(1, 13):
-            material = normalize_material(rvm.get(f"{BIN_MATERIAL_PREFIX}{bin_no}"))
+            material = normalize_material(self.raw_bin_material(rvm_id, bin_no))
             if material is not None:
                 active.append(bin_no)
-
         return active
 
     def current_bin_limit(self, rvm_id: str, bin_no: int) -> int | None:
@@ -313,14 +314,14 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if api_value > 0:
             return api_value
 
-        material = normalize_material(self.rvm_data(rvm_id).get(f"{BIN_MATERIAL_PREFIX}{bin_no}"))
+        material = normalize_material(self.raw_bin_material(rvm_id, bin_no))
         if material:
             return DEFAULT_BIN_CAPACITY_BY_MATERIAL.get(material)
 
         return None
 
     def bin_material(self, rvm_id: str, bin_no: int) -> str | None:
-        return normalize_material(self.rvm_data(rvm_id).get(f"{BIN_MATERIAL_PREFIX}{bin_no}"))
+        return normalize_material(self.raw_bin_material(rvm_id, bin_no))
 
     def machine_total_value(self, rvm_id: str, key: str) -> int:
         if key == KEY_ACCEPTED_CANS:

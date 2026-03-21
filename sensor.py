@@ -1,18 +1,19 @@
+"""Sensor platform for Envipco RVM.
+
+This file intentionally keeps entity classes thin.
+Complex API logic and derived calculations live in the coordinator,
+so sensors stay predictable and easier to debug.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-import re
 from typing import Any
 
-from homeassistant.components.sensor import (
-    SensorDeviceClass,
-    SensorEntity,
-    SensorStateClass,
-)
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -22,7 +23,6 @@ from homeassistant.util import slugify
 from .const import (
     BIN_COUNT_PREFIX,
     BIN_FULL_PREFIX,
-    BIN_MATERIAL_PREFIX,
     CONF_MACHINES,
     DEFAULT_BIN_CAPACITY_BY_MATERIAL,
     DOMAIN,
@@ -47,26 +47,20 @@ class SensorMachineDef:
 def parse_timestamp(value: Any) -> datetime | None:
     if value is None:
         return None
-
     if isinstance(value, datetime):
         if value.tzinfo is None:
             return value.replace(tzinfo=dt_util.UTC)
         return dt_util.as_utc(value)
-
     if isinstance(value, str):
         text = value.strip()
         if not text:
             return None
-
         parsed = dt_util.parse_datetime(text)
         if parsed is None:
             return None
-
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=dt_util.UTC)
-
         return dt_util.as_utc(parsed)
-
     return None
 
 
@@ -92,84 +86,22 @@ def material_label(material: str | None) -> str | None:
     return MATERIAL_LABELS_NL.get(material, material)
 
 
-def _extract_bin_number(text: str) -> int | None:
-    match = re.search(r"_bin_(\d+)_", text)
-    if not match:
-        return None
-    try:
-        return int(match.group(1))
-    except ValueError:
-        return None
-
-
-async def _async_remove_inactive_bin_entities(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    coordinator: EnvipcoCoordinator,
-    machines: list[SensorMachineDef],
-) -> None:
-    entity_registry = er.async_get(hass)
-
-    active_by_machine: dict[str, set[int]] = {}
-    for machine in machines:
-        active_by_machine[machine.id] = set(coordinator.active_bins(machine.id))
-
-    for entity_entry in list(entity_registry.entities.values()):
-        if entity_entry.config_entry_id != entry.entry_id:
-            continue
-
-        unique_id = (entity_entry.unique_id or "").strip()
-        entity_id = (entity_entry.entity_id or "").strip()
-
-        target_text = unique_id or entity_id
-        if "_bin_" not in target_text:
-            continue
-
-        machine_id = None
-        for machine in machines:
-            if target_text.startswith(f"{machine.id}_bin_"):
-                machine_id = machine.id
-                break
-
-        if machine_id is None:
-            continue
-
-        bin_no = _extract_bin_number(target_text)
-        if bin_no is None:
-            continue
-
-        if bin_no in active_by_machine.get(machine_id, set()):
-            continue
-
-        entity_registry.async_remove(entity_entry.entity_id)
-
-
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: EnvipcoCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-
     machines_cfg = entry.options.get(CONF_MACHINES, entry.data.get(CONF_MACHINES, [])) or []
     machines: list[SensorMachineDef] = []
 
     for item in machines_cfg:
         if not isinstance(item, dict):
             continue
-
         machine_id = str(item.get("id") or "").strip()
         if not machine_id:
             continue
-
-        machines.append(
-            SensorMachineDef(
-                id=machine_id,
-                name=str(item.get("name") or machine_id),
-            )
-        )
-
-    await _async_remove_inactive_bin_entities(hass, entry, coordinator, machines)
+        machines.append(SensorMachineDef(id=machine_id, name=str(item.get("name") or machine_id)))
 
     entities: list[SensorEntity] = []
 
@@ -383,9 +315,7 @@ class RejectTotalSensor(BaseSensor):
 
     @property
     def native_value(self):
-        return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get(
-            "rejects_total", 0
-        )
+        return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get("rejects_total", 0)
 
 
 class RejectRateSensor(BaseSensor):
@@ -400,9 +330,7 @@ class RejectRateSensor(BaseSensor):
 
     @property
     def native_value(self):
-        return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get(
-            "reject_rate", 0.0
-        )
+        return (self.coordinator.data.get("totals", {}) or {}).get(self.machine.id, {}).get("reject_rate", 0.0)
 
 
 class RevenueTodaySensor(BaseSensor):
@@ -440,10 +368,7 @@ class RevenueCanTodaySensor(BaseSensor):
     @property
     def native_value(self):
         rate_can, _ = self.coordinator.machine_rates(self.machine.id)
-        return round(
-            self.coordinator.machine_total_value(self.machine.id, KEY_ACCEPTED_CANS) * rate_can,
-            4,
-        )
+        return round(self.coordinator.machine_total_value(self.machine.id, KEY_ACCEPTED_CANS) * rate_can, 4)
 
 
 class RevenuePetTodaySensor(BaseSensor):
@@ -460,10 +385,7 @@ class RevenuePetTodaySensor(BaseSensor):
     @property
     def native_value(self):
         _, rate_pet = self.coordinator.machine_rates(self.machine.id)
-        return round(
-            self.coordinator.machine_total_value(self.machine.id, KEY_ACCEPTED_PET) * rate_pet,
-            4,
-        )
+        return round(self.coordinator.machine_total_value(self.machine.id, KEY_ACCEPTED_PET) * rate_pet, 4)
 
 
 class LocationInfoSensor(BaseSensor):
@@ -511,9 +433,7 @@ class RejectTypeSensor(BaseSensor):
 
     @property
     def native_value(self):
-        return (self.coordinator.data.get("rejects", {}) or {}).get(self.machine.id, {}).get(
-            self.reject_key, 0
-        )
+        return (self.coordinator.data.get("rejects", {}) or {}).get(self.machine.id, {}).get(self.reject_key, 0)
 
 
 class BinBaseSensor(BaseSensor):
@@ -521,12 +441,11 @@ class BinBaseSensor(BaseSensor):
         super().__init__(coordinator, machine)
         self.bin_no = bin_no
 
-    @property
-    def available(self) -> bool:
-        return self.bin_no in self.coordinator.active_bins(self.machine.id)
+    def _raw_material(self):
+        return self.coordinator.raw_bin_material(self.machine.id, self.bin_no)
 
     def _material(self) -> str | None:
-        return normalize_material(self._rvm().get(f"{BIN_MATERIAL_PREFIX}{self.bin_no}"))
+        return normalize_material(self._raw_material())
 
     def _material_label(self) -> str | None:
         return material_label(self._material())
@@ -540,6 +459,15 @@ class BinBaseSensor(BaseSensor):
 
     def _full(self):
         return self._rvm().get(f"{BIN_FULL_PREFIX}{self.bin_no}")
+
+    def _debug_attributes(self) -> dict[str, Any]:
+        material = self._material()
+        return {
+            "debug_raw_materiaal": self._raw_material(),
+            "debug_genormaliseerd_materiaal": material,
+            "debug_bin_actief_op_basis_van_materiaal": material is not None,
+            "debug_bron_actieve_bin": "materiaal",
+        }
 
 
 class BinCountSensor(BinBaseSensor):
@@ -558,11 +486,13 @@ class BinCountSensor(BinBaseSensor):
 
     @property
     def extra_state_attributes(self):
-        return {
+        data = {
             "materiaal": self._material_label(),
             "bin_full": self._full(),
             "actieve_limiet": self.coordinator.current_bin_limit(self.machine.id, self.bin_no),
         }
+        data.update(self._debug_attributes())
+        return data
 
 
 class BinLimitSensor(BinBaseSensor):
@@ -580,15 +510,27 @@ class BinLimitSensor(BinBaseSensor):
 
     @property
     def extra_state_attributes(self):
-        return {
+        configured = self.coordinator.configured_bin_limit(self.machine.id, self.bin_no)
+        api_limit = self.coordinator.safe_int(self._rvm().get(f"BinInfoLimitBin{self.bin_no}")) or None
+        material = self._material()
+
+        if configured is not None:
+            bron_limiet = "handmatig"
+        elif api_limit is not None:
+            bron_limiet = "api"
+        elif material is not None:
+            bron_limiet = "fallback_materiaal"
+        else:
+            bron_limiet = None
+
+        data = {
             "materiaal": self._material_label(),
-            "api_limiet": self.coordinator.safe_int(
-                self._rvm().get(f"BinInfoLimitBin{self.bin_no}")
-            ) or None,
-            "ingestelde_limiet": self.coordinator.configured_bin_limit(
-                self.machine.id, self.bin_no
-            ),
+            "api_limiet": api_limit,
+            "ingestelde_limiet": configured,
+            "bron_limiet": bron_limiet,
         }
+        data.update(self._debug_attributes())
+        return data
 
 
 class BinPercentageSensor(BinBaseSensor):
@@ -612,11 +554,11 @@ class BinPercentageSensor(BinBaseSensor):
     @property
     def extra_state_attributes(self):
         material = self._material()
-        return {
+        data = {
             "materiaal": self._material_label(),
             "aantal": self._count(),
             "actieve_limiet": self.coordinator.current_bin_limit(self.machine.id, self.bin_no),
-            "fallback_materiaal_limiet": (
-                DEFAULT_BIN_CAPACITY_BY_MATERIAL.get(material) if material else None
-            ),
+            "fallback_materiaal_limiet": DEFAULT_BIN_CAPACITY_BY_MATERIAL.get(material) if material else None,
         }
+        data.update(self._debug_attributes())
+        return data

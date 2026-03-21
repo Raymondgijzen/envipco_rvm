@@ -19,14 +19,11 @@ DEFAULT_RATE_CAN = 0.0107
 DEFAULT_RATE_PET = 0.0331
 
 EP_BASE = "https://ePortal.envipco.com/api"
-
 PLATFORMS = ["sensor", "number"]
 
 STATUS_STATE_KEY = "StatusInfoState"
 STATUS_LAST_REPORT_PRIMARY_KEY = "RVMStatusLastTime"
-STATUS_LAST_REPORT_FALLBACK_KEYS: list[str] = [
-    "StatusInfoLastReport",
-]
+STATUS_LAST_REPORT_FALLBACK_KEYS: list[str] = ["StatusInfoLastReport"]
 
 BIN_MATERIAL_PREFIX = "BinInfoMaterialBin"
 BIN_FULL_PREFIX = "BinInfoFullBin"

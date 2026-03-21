@@ -34,7 +34,6 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# API values that mean: this bin is not configured / not used
 INACTIVE_MATERIAL_VALUES = {
     "",
     "UNKNOWN",
@@ -112,6 +111,12 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._rejects_throttle_until: datetime | None = None
         self._last_successful_update: datetime | None = None
         self._last_error: str | None = None
+
+        # Platform-wide diagnostic timestamps
+        self._last_platform_contact: datetime | None = None
+        self._last_stats_fetch: datetime | None = None
+        self._last_rejects_successful_fetch: datetime | None = None
+
         self.data = {
             "stats": {},
             "rejects": {},
@@ -120,6 +125,21 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "machine_meta": self._machine_meta_cache,
             "local_revision": self._local_revision,
         }
+
+    @property
+    def last_platform_contact(self) -> datetime | None:
+        return self._last_platform_contact
+
+    @property
+    def last_stats_fetch(self) -> datetime | None:
+        return self._last_stats_fetch
+
+    @property
+    def last_rejects_successful_fetch(self) -> datetime | None:
+        return self._last_rejects_successful_fetch
+
+    def mark_platform_contact(self) -> None:
+        self._last_platform_contact = datetime.utcnow()
 
     @staticmethod
     def _row_get_case_insensitive(row: dict[str, Any], *candidates: str) -> Any:
@@ -293,6 +313,15 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             info["suggested_area"] = city
         return info
 
+    def integration_device_info(self) -> dict[str, Any]:
+        return {
+            "identifiers": {("envipco_rvm", f"{self.entry.entry_id}_platform")},
+            "name": "Envipco Platform",
+            "manufacturer": "Envipco",
+            "model": "ePortal API",
+            "entry_type": "service",
+        }
+
     def active_bins(self, rvm_id: str) -> list[int]:
         """Return active bins based only on material.
 
@@ -371,6 +400,7 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for site_id in sorted(site_ids):
             try:
                 site_data = await self.client.site_data(site_id)
+                self.mark_platform_contact()
             except EnvipcoThrottleError as err:
                 _LOGGER.warning(
                     "siteData tijdelijk geremd door API (%s sec); metadata-update wordt later opnieuw geprobeerd",
@@ -440,8 +470,10 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         try:
             rows = await self.client.rejects(self.rvm_ids(), date.today(), date.today(), include_acceptance=True)
+            self.mark_platform_contact()
             self._rejects_cache = rows
             self._last_rejects_fetch = now
+            self._last_rejects_successful_fetch = now
             self._rejects_throttle_until = None
             return rows
         except EnvipcoThrottleError as err:
@@ -462,6 +494,8 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         try:
             stats = await self.client.rvm_stats(self.rvm_ids(), date.today())
+            self.mark_platform_contact()
+            self._last_stats_fetch = now
             self._stats_throttle_until = None
             rejects_rows = await self._get_rejects_rows()
         except EnvipcoThrottleError as err:
@@ -534,7 +568,7 @@ class EnvipcoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "revenue_today": round((accepted_cans * rate_can) + (accepted_pet * rate_pet), 4),
             }
 
-        self._last_successful_update = datetime.utcnow()
+        self._last_successful_update = now
         self._last_error = None
 
         return {

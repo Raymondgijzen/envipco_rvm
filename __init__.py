@@ -74,10 +74,23 @@ async def _async_apply_registry_naming(
         if entry.entry_id not in device.config_entries:
             continue
 
+        identifiers = set(device.identifiers or set())
+        if ("envipco_rvm", f"{entry.entry_id}_platform") in identifiers:
+            desired_name = "Envipco Platform"
+            if device.name != desired_name and device.name_by_user is None:
+                try:
+                    device_registry.async_update_device(device.id, name_by_user=desired_name)
+                except Exception:
+                    pass
+            continue
+
         rvm_id = None
         for domain, identifier in device.identifiers:
             if domain == DOMAIN:
-                rvm_id = str(identifier)
+                ident = str(identifier)
+                if ident == f"{entry.entry_id}_platform":
+                    continue
+                rvm_id = ident
                 break
 
         if not rvm_id:
@@ -127,8 +140,6 @@ async def _async_force_remove_inactive_bin_entities(
                     except Exception:
                         pass
 
-    # Safety net: also remove stale entries that still belong to this config entry
-    # and match an inactive bin unique_id pattern.
     for entity_entry in list(entity_registry.entities.values()):
         if entity_entry.config_entry_id != entry.entry_id:
             continue
@@ -212,6 +223,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     device_registry = async_get_device_registry(hass)
+    device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        **coordinator.integration_device_info(),
+    )
+
     for machine in coordinator.machines():
         device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,

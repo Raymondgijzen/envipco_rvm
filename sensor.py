@@ -1,9 +1,4 @@
-"""Sensor platform for Envipco RVM.
-
-This file intentionally keeps entity classes thin.
-Complex API logic and derived calculations live in the coordinator,
-so sensors stay predictable and easier to debug.
-"""
+"""Sensor platform for Envipco RVM."""
 
 from __future__ import annotations
 
@@ -103,7 +98,11 @@ async def async_setup_entry(
             continue
         machines.append(SensorMachineDef(id=machine_id, name=str(item.get("name") or machine_id)))
 
-    entities: list[SensorEntity] = []
+    entities: list[SensorEntity] = [
+        PlatformLastContactSensor(coordinator, entry),
+        PlatformLastStatsFetchSensor(coordinator, entry),
+        PlatformLastRejectsFetchSensor(coordinator, entry),
+    ]
 
     for machine in machines:
         entities.extend(
@@ -139,6 +138,66 @@ async def async_setup_entry(
             )
 
     async_add_entities(entities)
+
+
+class PlatformBaseSensor(CoordinatorEntity[EnvipcoCoordinator], SensorEntity):
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    def __init__(self, coordinator: EnvipcoCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self.entry = entry
+
+    @property
+    def device_info(self):
+        return self.coordinator.integration_device_info()
+
+    @property
+    def suggested_object_id(self) -> str | None:
+        unique_id = getattr(self, "_attr_unique_id", None)
+        if unique_id:
+            return slugify(str(unique_id), separator="_")
+        return None
+
+
+class PlatformLastContactSensor(PlatformBaseSensor):
+    _attr_name = "Laatste platform connectie"
+    _attr_icon = "mdi:cloud-check-outline"
+
+    def __init__(self, coordinator: EnvipcoCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_platform_last_contact"
+
+    @property
+    def native_value(self):
+        return parse_timestamp(self.coordinator.last_platform_contact)
+
+
+class PlatformLastStatsFetchSensor(PlatformBaseSensor):
+    _attr_name = "Laatste status info update"
+    _attr_icon = "mdi:update"
+
+    def __init__(self, coordinator: EnvipcoCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_platform_last_stats_fetch"
+
+    @property
+    def native_value(self):
+        return parse_timestamp(self.coordinator.last_stats_fetch)
+
+
+class PlatformLastRejectsFetchSensor(PlatformBaseSensor):
+    _attr_name = "Laatste rejects update"
+    _attr_icon = "mdi:file-chart-outline"
+
+    def __init__(self, coordinator: EnvipcoCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_platform_last_rejects_fetch"
+
+    @property
+    def native_value(self):
+        return parse_timestamp(self.coordinator.last_rejects_successful_fetch)
 
 
 class BaseSensor(CoordinatorEntity[EnvipcoCoordinator], SensorEntity):

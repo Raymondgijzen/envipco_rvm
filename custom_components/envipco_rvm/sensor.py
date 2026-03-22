@@ -102,6 +102,8 @@ async def async_setup_entry(
         PlatformLastContactSensor(coordinator, entry),
         PlatformLastStatsFetchSensor(coordinator, entry),
         PlatformLastRejectsFetchSensor(coordinator, entry),
+        PlatformApiThrottleStatusSensor(coordinator, entry),
+        PlatformApiThrottleSecondsSensor(coordinator, entry),
     ]
 
     for machine in machines:
@@ -111,8 +113,6 @@ async def async_setup_entry(
                 LastReportSensor(coordinator, machine),
                 LastReportTextSensor(coordinator, machine),
                 LastSuccessfulUpdateSensor(coordinator, machine),
-                ApiThrottleStatusSensor(coordinator, machine),
-                ApiThrottleSecondsSensor(coordinator, machine),
                 AcceptedTotalSensor(coordinator, machine),
                 AcceptedCansSensor(coordinator, machine),
                 AcceptedPetSensor(coordinator, machine),
@@ -143,7 +143,6 @@ async def async_setup_entry(
 class PlatformBaseSensor(CoordinatorEntity[EnvipcoCoordinator], SensorEntity):
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_device_class = SensorDeviceClass.TIMESTAMP
 
     def __init__(self, coordinator: EnvipcoCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
@@ -164,6 +163,7 @@ class PlatformBaseSensor(CoordinatorEntity[EnvipcoCoordinator], SensorEntity):
 class PlatformLastContactSensor(PlatformBaseSensor):
     _attr_name = "Laatste platform connectie"
     _attr_icon = "mdi:cloud-check-outline"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
 
     def __init__(self, coordinator: EnvipcoCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry)
@@ -177,6 +177,7 @@ class PlatformLastContactSensor(PlatformBaseSensor):
 class PlatformLastStatsFetchSensor(PlatformBaseSensor):
     _attr_name = "Laatste status info update"
     _attr_icon = "mdi:update"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
 
     def __init__(self, coordinator: EnvipcoCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry)
@@ -190,6 +191,7 @@ class PlatformLastStatsFetchSensor(PlatformBaseSensor):
 class PlatformLastRejectsFetchSensor(PlatformBaseSensor):
     _attr_name = "Laatste rejects update"
     _attr_icon = "mdi:file-chart-outline"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
 
     def __init__(self, coordinator: EnvipcoCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry)
@@ -198,6 +200,46 @@ class PlatformLastRejectsFetchSensor(PlatformBaseSensor):
     @property
     def native_value(self):
         return parse_timestamp(self.coordinator.last_rejects_successful_fetch)
+
+
+class PlatformApiThrottleStatusSensor(PlatformBaseSensor):
+    _attr_name = "API throttling"
+    _attr_icon = "mdi:speedometer-slow"
+
+    def __init__(self, coordinator: EnvipcoCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_platform_api_throttle_status"
+
+    @property
+    def native_value(self):
+        return getattr(self.coordinator, "throttle_status_text", "Geen throttling")
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "rvmstats_geremd": getattr(self.coordinator, "stats_throttled", False),
+            "rvmstats_resterend_seconden": getattr(self.coordinator, "stats_throttle_remaining", 0),
+            "rejects_geremd": getattr(self.coordinator, "rejects_throttled", False),
+            "rejects_resterend_seconden": getattr(self.coordinator, "rejects_throttle_remaining", 0),
+            "laatste_fout": getattr(self.coordinator, "last_error", None),
+        }
+
+
+class PlatformApiThrottleSecondsSensor(PlatformBaseSensor):
+    _attr_name = "API throttle resterend"
+    _attr_icon = "mdi:timer-sand"
+    _attr_native_unit_of_measurement = "s"
+
+    def __init__(self, coordinator: EnvipcoCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_platform_api_throttle_remaining"
+
+    @property
+    def native_value(self):
+        return max(
+            getattr(self.coordinator, "stats_throttle_remaining", 0),
+            getattr(self.coordinator, "rejects_throttle_remaining", 0),
+        )
 
 
 class BaseSensor(CoordinatorEntity[EnvipcoCoordinator], SensorEntity):
@@ -277,48 +319,6 @@ class LastSuccessfulUpdateSensor(BaseSensor):
     @property
     def native_value(self):
         return parse_timestamp(getattr(self.coordinator, "last_successful_update", None))
-
-
-class ApiThrottleStatusSensor(BaseSensor):
-    _attr_name = "API throttling"
-    _attr_icon = "mdi:speedometer-slow"
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-    def __init__(self, coordinator, machine):
-        super().__init__(coordinator, machine)
-        self._attr_unique_id = f"{machine.id}_api_throttle_status"
-
-    @property
-    def native_value(self):
-        return getattr(self.coordinator, "throttle_status_text", "Geen throttling")
-
-    @property
-    def extra_state_attributes(self):
-        return {
-            "rvmstats_geremd": getattr(self.coordinator, "stats_throttled", False),
-            "rvmstats_resterend_seconden": getattr(self.coordinator, "stats_throttle_remaining", 0),
-            "rejects_geremd": getattr(self.coordinator, "rejects_throttled", False),
-            "rejects_resterend_seconden": getattr(self.coordinator, "rejects_throttle_remaining", 0),
-            "laatste_fout": getattr(self.coordinator, "last_error", None),
-        }
-
-
-class ApiThrottleSecondsSensor(BaseSensor):
-    _attr_name = "API throttle resterend"
-    _attr_icon = "mdi:timer-sand"
-    _attr_native_unit_of_measurement = "s"
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-    def __init__(self, coordinator, machine):
-        super().__init__(coordinator, machine)
-        self._attr_unique_id = f"{machine.id}_api_throttle_remaining"
-
-    @property
-    def native_value(self):
-        return max(
-            getattr(self.coordinator, "stats_throttle_remaining", 0),
-            getattr(self.coordinator, "rejects_throttle_remaining", 0),
-        )
 
 
 class AcceptedTotalSensor(BaseSensor):
